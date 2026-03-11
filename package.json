@@ -1,0 +1,29 @@
+{
+  "name": "skills",
+  "version": "0.1.0",
+  "description": "MVP CLI for managing local AI agent skills",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "skills": "dist/bin/skills.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "prepack": "npm run build",
+    "test": "npm run build && ./scripts/smoke.sh"
+  },
+  "bundleDependencies": [
+    "commander",
+    "semver",
+    "yaml"
+  ],
+  "dependencies": {
+    "commander": "file:vendor/commander",
+    "semver": "file:vendor/semver",
+    "yaml": "file:vendor/yaml"
+  }
+}
