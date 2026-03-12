@@ -2,12 +2,12 @@
 
 <div align="center">
 
-[![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)](#)
-[![Codex](https://img.shields.io/badge/Codex-Supported-111111.svg)](#)
-[![Claude_Code](https://img.shields.io/badge/Claude_Code-Supported-D97706.svg)](#)
-[![Project_+_Global](https://img.shields.io/badge/Project_+_Global-Scopes-16A34A.svg)](#)
-[![Import_+_Sync](https://img.shields.io/badge/Import_+_Sync-Multi_Agent-2563EB.svg)](#)
-[![Agent_Friendly](https://img.shields.io/badge/Agent-Friendly-0EA5E9.svg)](#)
+![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)
+![Codex](https://img.shields.io/badge/Codex-Supported-111111.svg)
+![Claude_Code](https://img.shields.io/badge/Claude_Code-Supported-D97706.svg)
+![Project_+_Global](https://img.shields.io/badge/Project_+_Global-Scopes-16A34A.svg)
+![Import_+_Sync](https://img.shields.io/badge/Import_+_Sync-Multi_Agent-2563EB.svg)
+![Agent_Friendly](https://img.shields.io/badge/Agent-Friendly-0EA5E9.svg)
 
 **Manage AI agent skills like a real environment**
 
@@ -15,13 +15,11 @@ English | [中文](README.zh-CN.md)
 
 </div>
 
-Manage AI agent skills like a real environment.
-
 Reproduce, sync, inspect, and reuse skills across projects and agents.
 
 ## Why this exists
 
-AI coding agents are getting good at using skills, but skill management is still messy.
+AI coding agents are getting better at using skills, but skill management is still messy.
 
 Today, most teams still:
 
@@ -33,7 +31,7 @@ Today, most teams still:
 
 `skills` turns that into a repeatable workflow.
 
-## What feels different
+## Highlights
 
 ### Clone a repo, run one command, get the same skills
 
@@ -60,6 +58,11 @@ skills inspect ./my-skill --write
 skills install
 skills install -g
 ```
+
+## Requirements
+
+- Node.js 18+ (recommended)
+- macOS or Linux recommended for the current release
 
 ## Install
 
