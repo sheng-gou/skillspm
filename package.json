@@ -1,7 +1,7 @@
 {
   "name": "skills",
   "version": "0.1.0",
-  "description": "MVP CLI for managing local AI agent skills",
+  "description": "CLI for reproducible AI agent skills environments",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {

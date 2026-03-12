@@ -82,15 +82,20 @@ function parseArgument(spec) {
 }
 
 function parseOption(spec) {
-  const tokens = spec.split(/\s+/).filter(Boolean);
+  const tokens = spec
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token) => token.replace(/,$/, ""));
+  const shortFlag = tokens.find((token) => /^-[^-]$/.test(token));
   const longName = tokens.find((token) => token.startsWith("--"));
   if (!longName) {
     throw new Error(`Unsupported option spec: ${spec}`);
   }
   return {
     flag: longName,
+    shortFlag,
     name: longName.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase()),
-    expectsValue: tokens.length > 1
+    expectsValue: tokens.some((token) => token.startsWith("<") || token.startsWith("["))
   };
 }
 
@@ -100,8 +105,8 @@ function parseTokens(tokens, definitions) {
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
-    if (token.startsWith("--")) {
-      const option = definitions.find((candidate) => candidate.flag === token);
+    if (token.startsWith("-")) {
+      const option = definitions.find((candidate) => candidate.flag === token || candidate.shortFlag === token);
       if (!option) {
         throw new Error(`Unknown option: ${token}`);
       }

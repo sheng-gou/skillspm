@@ -1,6 +1,8 @@
 import path from "node:path";
 import { writeLockfile } from "./lockfile";
 import { resolveProject } from "./resolver";
+import { resolveStateContainmentRoot } from "./scope";
+import type { ScopeLayout } from "./scope";
 import type { SkillsLock, SkillsManifest } from "./types";
 import {
   copyDir,
@@ -18,40 +20,39 @@ export interface InstallProjectResult {
   manifest: SkillsManifest;
 }
 
-export async function installProject(cwd: string): Promise<InstallProjectResult> {
+export async function installProject(layout: ScopeLayout): Promise<InstallProjectResult> {
   printInfo("Resolving dependencies...");
-  const resolution = await resolveProject(cwd);
+  const resolution = await resolveProject(layout.rootDir);
   printSuccess(`Resolved ${resolution.nodes.size} skill${resolution.nodes.size === 1 ? "" : "s"}`);
 
-  const installedRoot = path.join(cwd, ".skills", "installed");
-  await ensureDir(installedRoot);
-  await resolveCleanupRoot(installedRoot, {
-    containmentRoot: cwd,
-    label: `cleanup root ${installedRoot}`
+  await resolveCleanupRoot(layout.installedRoot, {
+    containmentRoot: resolveStateContainmentRoot(layout),
+    label: `cleanup root ${layout.installedRoot}`
   });
+  await ensureDir(layout.installedRoot);
   const sortedNodes = [...resolution.nodes.values()].sort((left, right) => left.id.localeCompare(right.id));
   const desiredEntries = sortedNodes.map((node) => installedEntryName(node.id, node.version));
 
   printInfo("Installing...");
   for (const node of sortedNodes) {
-    const targetDir = path.join(installedRoot, installedEntryName(node.id, node.version));
+    const targetDir = path.join(layout.installedRoot, installedEntryName(node.id, node.version));
     await copyDir(node.installPath, targetDir);
     printSuccess(`Installed ${node.id}@${node.version}`);
   }
-  await removeStaleRootEntries(installedRoot, desiredEntries, {
-    containmentRoot: cwd,
-    label: `cleanup root ${installedRoot}`
+  await removeStaleRootEntries(layout.installedRoot, desiredEntries, {
+    containmentRoot: resolveStateContainmentRoot(layout),
+    label: `cleanup root ${layout.installedRoot}`
   });
 
   const resolvedEntries = sortedNodes.reduce<SkillsLock["resolved"]>((accumulator, node) => {
-      accumulator[node.id] = {
-        version: node.version,
-        source: node.source,
-        artifact: node.artifact,
-        dependencies: node.dependencies.map((dependency) => dependency.id)
-      };
-      return accumulator;
-    }, {});
+    accumulator[node.id] = {
+      version: node.version,
+      source: node.source,
+      artifact: node.artifact,
+      dependencies: node.dependencies.map((dependency) => dependency.id)
+    };
+    return accumulator;
+  }, {});
 
   const lockfile: SkillsLock = {
     schema: "skills-lock/v1",
@@ -60,7 +61,7 @@ export async function installProject(cwd: string): Promise<InstallProjectResult>
     generated_at: new Date().toISOString()
   };
 
-  await writeLockfile(cwd, lockfile);
+  await writeLockfile(layout.rootDir, lockfile);
   printSuccess("Updated skills.lock");
   return {
     lockfile,

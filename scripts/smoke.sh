@@ -308,6 +308,94 @@ grep -q "codex synced (copy)" /tmp/skills-sync-cleanup.log
 grep -q "claude_code synced (copy)" /tmp/skills-sync-cleanup.log
 grep -q "generic synced (copy)" /tmp/skills-sync-cleanup.log
 
+DEFAULT_SYNC_LINK_DIR="${TMP_DIR}/default-sync-link-workspace"
+DEFAULT_SYNC_OPENCLAW_OUTSIDE="${TMP_DIR}/default-sync-openclaw-outside"
+DEFAULT_SYNC_CODEX_OUTSIDE="${TMP_DIR}/default-sync-codex-outside"
+DEFAULT_SYNC_CLAUDE_OUTSIDE="${TMP_DIR}/default-sync-claude-outside"
+mkdir -p \
+  "${DEFAULT_SYNC_LINK_DIR}/local-skills/default-sync-link-check" \
+  "${DEFAULT_SYNC_OPENCLAW_OUTSIDE}" \
+  "${DEFAULT_SYNC_CODEX_OUTSIDE}" \
+  "${DEFAULT_SYNC_CLAUDE_OUTSIDE}" \
+  "${HOME}/.openclaw" \
+  "${HOME}/.codex" \
+  "${HOME}/.claude"
+
+cat > "${DEFAULT_SYNC_LINK_DIR}/local-skills/default-sync-link-check/SKILL.md" <<'EOF'
+# default sync link
+EOF
+
+cat > "${DEFAULT_SYNC_LINK_DIR}/local-skills/default-sync-link-check/skill.yaml" <<'EOF'
+schema: skill/v1
+id: local/default-sync-link-check
+name: Default Sync Link Check
+version: 0.13.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+rm -rf "${HOME}/.openclaw/skills" "${HOME}/.codex/skills" "${HOME}/.claude/skills"
+ln -s "${DEFAULT_SYNC_OPENCLAW_OUTSIDE}" "${HOME}/.openclaw/skills"
+ln -s "${DEFAULT_SYNC_CODEX_OUTSIDE}" "${HOME}/.codex/skills"
+ln -s "${DEFAULT_SYNC_CLAUDE_OUTSIDE}" "${HOME}/.claude/skills"
+
+cd "${DEFAULT_SYNC_LINK_DIR}"
+${CLI} init >/tmp/skills-default-sync-link-init.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: default-sync-link-check
+skills:
+  - id: local/default-sync-link-check
+    path: ./local-skills/default-sync-link-check
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-default-sync-link-install.log
+
+set +e
+${CLI} sync >/tmp/skills-default-sync-openclaw.log 2>&1
+DEFAULT_SYNC_OPENCLAW_EXIT=$?
+set -e
+test "${DEFAULT_SYNC_OPENCLAW_EXIT}" -eq 2
+grep -q "cleanup root .*\\.openclaw/skills resolves outside" /tmp/skills-default-sync-openclaw.log
+! test -e "${DEFAULT_SYNC_OPENCLAW_OUTSIDE}/local__default-sync-link-check@0.13.0"
+
+set +e
+${CLI} sync codex >/tmp/skills-default-sync-codex.log 2>&1
+DEFAULT_SYNC_CODEX_EXIT=$?
+set -e
+test "${DEFAULT_SYNC_CODEX_EXIT}" -eq 2
+grep -q "cleanup root .*\\.codex/skills resolves outside" /tmp/skills-default-sync-codex.log
+! test -e "${DEFAULT_SYNC_CODEX_OUTSIDE}/local__default-sync-link-check@0.13.0"
+
+set +e
+${CLI} sync claude_code >/tmp/skills-default-sync-claude.log 2>&1
+DEFAULT_SYNC_CLAUDE_EXIT=$?
+set -e
+test "${DEFAULT_SYNC_CLAUDE_EXIT}" -eq 2
+grep -q "cleanup root .*\\.claude/skills resolves outside" /tmp/skills-default-sync-claude.log
+! test -e "${DEFAULT_SYNC_CLAUDE_OUTSIDE}/local__default-sync-link-check@0.13.0"
+
+SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} sync >/tmp/skills-default-sync-openclaw-unsafe.log
+SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} sync codex >/tmp/skills-default-sync-codex-unsafe.log
+SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} sync claude_code >/tmp/skills-default-sync-claude-unsafe.log
+
+test -d "${DEFAULT_SYNC_OPENCLAW_OUTSIDE}/local__default-sync-link-check@0.13.0"
+test -d "${DEFAULT_SYNC_CODEX_OUTSIDE}/local__default-sync-link-check@0.13.0"
+test -d "${DEFAULT_SYNC_CLAUDE_OUTSIDE}/local__default-sync-link-check@0.13.0"
+grep -q "openclaw synced (copy)" /tmp/skills-default-sync-openclaw-unsafe.log
+grep -q "codex synced (copy)" /tmp/skills-default-sync-codex-unsafe.log
+grep -q "claude_code synced (copy)" /tmp/skills-default-sync-claude-unsafe.log
+
+rm -rf "${HOME}/.openclaw/skills" "${HOME}/.codex/skills" "${HOME}/.claude/skills"
+mkdir -p "${HOME}/.openclaw/skills" "${HOME}/.codex/skills" "${HOME}/.claude/skills"
+
 AUTO_SYNC_DIR="${TMP_DIR}/auto-sync-workspace"
 mkdir -p "${AUTO_SYNC_DIR}/local-skills/auto-sync-check"
 cd "${AUTO_SYNC_DIR}"
@@ -685,6 +773,87 @@ grep -q "cleanup root .*\\.skills/installed resolves outside" /tmp/skills-instal
 SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} install >/tmp/skills-install-root-link-unsafe.log
 test -d "${INSTALL_ROOT_LINK_OUTSIDE}/local__root-link-check@0.9.0"
 
+PROJECT_STATE_LINK_DIR="${TMP_DIR}/project-state-link-workspace"
+PROJECT_STATE_LINK_OUTSIDE="${TMP_DIR}/project-state-link-outside"
+mkdir -p "${PROJECT_STATE_LINK_DIR}/local-skills/project-state-link-check" "${PROJECT_STATE_LINK_OUTSIDE}"
+
+cat > "${PROJECT_STATE_LINK_DIR}/local-skills/project-state-link-check/SKILL.md" <<'EOF'
+# project state link
+EOF
+
+cat > "${PROJECT_STATE_LINK_DIR}/local-skills/project-state-link-check/skill.yaml" <<'EOF'
+schema: skill/v1
+id: local/project-state-link-check
+name: Project State Link Check
+version: 0.14.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cd "${PROJECT_STATE_LINK_DIR}"
+${CLI} init >/tmp/skills-project-state-link-init.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: project-state-link-check
+skills:
+  - id: local/project-state-link-check
+    path: ./local-skills/project-state-link-check
+EOF
+
+rm -rf .skills
+ln -s "${PROJECT_STATE_LINK_OUTSIDE}" .skills
+
+set +e
+${CLI} install >/tmp/skills-project-state-link-install.log 2>&1
+PROJECT_STATE_LINK_EXIT=$?
+set -e
+test "${PROJECT_STATE_LINK_EXIT}" -eq 2
+grep -q "cleanup root .*\\.skills/installed resolves outside" /tmp/skills-project-state-link-install.log
+! test -e "${PROJECT_STATE_LINK_OUTSIDE}/installed"
+
+SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} install >/tmp/skills-project-state-link-install-unsafe.log
+test -d "${PROJECT_STATE_LINK_OUTSIDE}/installed/local__project-state-link-check@0.14.0"
+
+PROJECT_IMPORT_LINK_DIR="${TMP_DIR}/project-import-link-workspace"
+PROJECT_IMPORT_LINK_OUTSIDE="${TMP_DIR}/project-import-link-outside"
+PROJECT_IMPORT_SOURCE="${TMP_DIR}/project-import-link-source"
+mkdir -p "${PROJECT_IMPORT_LINK_DIR}" "${PROJECT_IMPORT_LINK_OUTSIDE}/scan/external-import-check" "${PROJECT_IMPORT_SOURCE}"
+
+cat > "${PROJECT_IMPORT_LINK_OUTSIDE}/scan/external-import-check/SKILL.md" <<'EOF'
+# external import check
+EOF
+
+cat > "${PROJECT_IMPORT_LINK_OUTSIDE}/scan/external-import-check/skill.yaml" <<'EOF'
+schema: skill/v1
+id: external/import-check
+name: External Import Check
+version: 0.15.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cd "${PROJECT_IMPORT_LINK_DIR}"
+${CLI} init >/tmp/skills-project-import-link-init.log
+rm -rf .skills
+ln -s "${PROJECT_IMPORT_LINK_OUTSIDE}" .skills
+
+set +e
+${CLI} import --from "${PROJECT_IMPORT_LINK_OUTSIDE}/scan" >/tmp/skills-project-import-link.log 2>&1
+PROJECT_IMPORT_LINK_EXIT=$?
+set -e
+test "${PROJECT_IMPORT_LINK_EXIT}" -eq 2
+grep -q "imported skill vendor path .*\\.skills/imported/external__import-check resolves outside" /tmp/skills-project-import-link.log
+! test -e "${PROJECT_IMPORT_LINK_OUTSIDE}/imported"
+
+SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} import --from "${PROJECT_IMPORT_LINK_OUTSIDE}/scan" >/tmp/skills-project-import-link-unsafe.log
+grep -q "Imported 1 skill" /tmp/skills-project-import-link-unsafe.log
+grep -q "path: .skills/imported/external__import-check" skills.yaml
+test -d "${PROJECT_IMPORT_LINK_OUTSIDE}/imported/external__import-check"
+
 SYNC_LINK_DIR="${TMP_DIR}/sync-target-link-workspace"
 SYNC_LINK_OUTSIDE="${TMP_DIR}/sync-target-link-outside"
 mkdir -p "${SYNC_LINK_DIR}/local-skills/sync-link-check" "${SYNC_LINK_OUTSIDE}"
@@ -735,6 +904,58 @@ grep -q "cleanup root .*linked-target resolves outside" /tmp/skills-sync-link.lo
 
 SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} sync >/tmp/skills-sync-link-unsafe.log
 test -d "${SYNC_LINK_OUTSIDE}/local__sync-link-check@0.10.0"
+
+SYNC_NESTED_LINK_DIR="${TMP_DIR}/sync-nested-target-workspace"
+SYNC_NESTED_LINK_OUTSIDE="${TMP_DIR}/sync-nested-target-outside"
+mkdir -p "${SYNC_NESTED_LINK_DIR}/local-skills/sync-nested-check" "${SYNC_NESTED_LINK_OUTSIDE}"
+
+cat > "${SYNC_NESTED_LINK_DIR}/local-skills/sync-nested-check/SKILL.md" <<'EOF'
+# sync nested link
+EOF
+
+cat > "${SYNC_NESTED_LINK_DIR}/local-skills/sync-nested-check/skill.yaml" <<'EOF'
+schema: skill/v1
+id: local/sync-nested-check
+name: Sync Nested Check
+version: 0.16.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+ln -s "${SYNC_NESTED_LINK_OUTSIDE}" "${SYNC_NESTED_LINK_DIR}/linked"
+
+cd "${SYNC_NESTED_LINK_DIR}"
+${CLI} init >/tmp/skills-sync-nested-init.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: sync-nested-target-check
+skills:
+  - id: local/sync-nested-check
+    path: ./local-skills/sync-nested-check
+targets:
+  - type: generic
+    path: ./linked/newdir
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-sync-nested-install.log
+
+set +e
+${CLI} sync >/tmp/skills-sync-nested.log 2>&1
+SYNC_NESTED_EXIT=$?
+set -e
+test "${SYNC_NESTED_EXIT}" -eq 2
+grep -q "cleanup root .*newdir resolves outside" /tmp/skills-sync-nested.log
+! test -e "${SYNC_NESTED_LINK_OUTSIDE}/newdir"
+
+SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} sync >/tmp/skills-sync-nested-unsafe.log
+test -d "${SYNC_NESTED_LINK_OUTSIDE}/newdir/local__sync-nested-check@0.16.0"
 
 SOURCE_INDEX_LINK_DIR="${TMP_DIR}/source-index-link-workspace"
 SOURCE_INDEX_LINK_OUTSIDE="${TMP_DIR}/source-index-link-outside"
@@ -820,6 +1041,91 @@ ADD_LINK_EXIT=$?
 set -e
 test "${ADD_LINK_EXIT}" -eq 2
 grep -q "local skill path ./linked-add-skill resolves outside" /tmp/skills-add-link.log
+
+BOOTSTRAP_DIR="${TMP_DIR}/bootstrap-workspace"
+mkdir -p "${BOOTSTRAP_DIR}/local-skills/bootstrap-check"
+cd "${BOOTSTRAP_DIR}"
+
+${CLI} init >/tmp/skills-bootstrap-init.log
+
+cat > local-skills/bootstrap-check/SKILL.md <<'EOF'
+# bootstrap
+EOF
+
+cat > local-skills/bootstrap-check/skill.yaml <<'EOF'
+schema: skill/v1
+id: local/bootstrap-check
+name: Bootstrap Check
+version: 0.12.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+${CLI} add ./local-skills/bootstrap-check >/tmp/skills-bootstrap-add.log
+${CLI} bootstrap >/tmp/skills-bootstrap.log
+
+test -f skills.lock
+test -d .skills/installed/local__bootstrap-check@0.12.0
+grep -q "Result: healthy" /tmp/skills-bootstrap.log
+
+INSPECT_DIR="${TMP_DIR}/inspect-workspace"
+mkdir -p "${INSPECT_DIR}/skill-without-yaml" "${INSPECT_DIR}/skill-without-doc"
+cd "${INSPECT_DIR}"
+
+cat > skill-without-yaml/SKILL.md <<'EOF'
+# inspect
+EOF
+
+${CLI} inspect ./skill-without-yaml --set-version 0.3.1 --write >/tmp/skills-inspect-write.log
+grep -q '^id: skill-without-yaml$' skill-without-yaml/skill.yaml
+grep -q '^version: 0.3.1$' skill-without-yaml/skill.yaml
+grep -q '^dependencies: \[\]$' skill-without-yaml/skill.yaml
+
+${CLI} inspect ./skill-without-doc --write >/tmp/skills-inspect-missing-doc.log
+grep -q '^id: skill-without-doc$' skill-without-doc/skill.yaml
+
+${CLI} init >/tmp/skills-inspect-init.log
+${CLI} add ./skill-without-doc >/tmp/skills-inspect-add.log
+${CLI} install >/tmp/skills-inspect-install.log
+
+set +e
+${CLI} doctor --json >/tmp/skills-doctor.json 2>&1
+DOCTOR_JSON_EXIT=$?
+set -e
+test "${DOCTOR_JSON_EXIT}" -eq 6
+grep -q '"result": "failed"' /tmp/skills-doctor.json
+grep -q 'missing SKILL.md' /tmp/skills-doctor.json
+
+GLOBAL_SCOPE_DIR="${TMP_DIR}/global-scope-workspace"
+mkdir -p "${GLOBAL_SCOPE_DIR}" "${HOME}/.skills/local-skills/global-check"
+cd "${GLOBAL_SCOPE_DIR}"
+
+cat > "${HOME}/.skills/local-skills/global-check/SKILL.md" <<'EOF'
+# global
+EOF
+
+cat > "${HOME}/.skills/local-skills/global-check/skill.yaml" <<'EOF'
+schema: skill/v1
+id: local/global-check
+name: Global Check
+version: 0.8.1
+package:
+  type: dir
+  entry: ./
+EOF
+
+${CLI} init -g >/tmp/skills-global-init.log
+test -f "${HOME}/.skills/skills.yaml"
+test -d "${HOME}/.skills/installed"
+${CLI} add -g "${HOME}/.skills/local-skills/global-check" >/tmp/skills-global-add.log
+${CLI} install -g >/tmp/skills-global-install.log
+${CLI} sync -g >/tmp/skills-global-sync.log
+
+test -f "${HOME}/.skills/skills.lock"
+test -d "${HOME}/.skills/installed/local__global-check@0.8.1"
+test -d "${HOME}/.openclaw/skills/local__global-check@0.8.1"
+grep -q "openclaw synced (copy)" /tmp/skills-global-sync.log
 
 if [ "${SKILLS_SKIP_PACKAGING_TEST:-0}" != "1" ]; then
   PACK_TMP="$(mktemp -d)"

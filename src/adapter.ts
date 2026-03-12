@@ -2,6 +2,8 @@ import os from "node:os";
 import path from "node:path";
 import { readdir, rm, symlink } from "node:fs/promises";
 import { CliError } from "./errors";
+import { resolveStateContainmentRoot } from "./scope";
+import type { ScopeLayout } from "./scope";
 import type { InstallMode, ManifestTarget, SkillsManifest, TargetType } from "./types";
 import { copyDir, ensureDir, exists, printInfo, printSuccess, removeStaleRootEntries, resolveCleanupRoot } from "./utils";
 
@@ -14,6 +16,7 @@ interface ResolvedTarget {
   type: TargetType;
   path: string;
   configuredPath?: string;
+  containmentRoot?: string;
 }
 
 export function resolveInstallMode(mode?: string, fallback?: InstallMode): InstallMode {
@@ -38,17 +41,16 @@ export function resolveDefaultTargetPath(type: TargetType): string | undefined {
   }
 }
 
-export async function syncTargets(cwd: string, manifest: SkillsManifest, options: SyncOptions = {}): Promise<void> {
-  const installedRoot = path.join(cwd, ".skills", "installed");
-  if (!(await exists(installedRoot))) {
+export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest, options: SyncOptions = {}): Promise<void> {
+  if (!(await exists(layout.installedRoot))) {
     throw new CliError("No installed skills found. Run `skills install` first.", 2);
   }
-  await resolveCleanupRoot(installedRoot, {
-    containmentRoot: cwd,
-    label: `cleanup root ${installedRoot}`
+  await resolveCleanupRoot(layout.installedRoot, {
+    containmentRoot: resolveStateContainmentRoot(layout),
+    label: `cleanup root ${layout.installedRoot}`
   });
 
-  const installedEntries = (await readdir(installedRoot, { withFileTypes: true }))
+  const installedEntries = (await readdir(layout.installedRoot, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
@@ -57,7 +59,7 @@ export async function syncTargets(cwd: string, manifest: SkillsManifest, options
     throw new CliError("No installed skills found. Run `skills install` first.", 2);
   }
 
-  const targets = resolveTargets(cwd, manifest, options.targetType);
+  const targets = resolveTargets(layout.rootDir, manifest, options.targetType);
   if (targets.length === 0) {
     throw new CliError("No enabled sync targets found in skills.yaml.", 2);
   }
@@ -66,16 +68,16 @@ export async function syncTargets(cwd: string, manifest: SkillsManifest, options
   printInfo("Syncing targets...");
 
   for (const target of targets) {
-    await ensureDir(target.path);
-    const cleanupOptions = target.configuredPath
+    const cleanupOptions = target.containmentRoot
       ? {
-          containmentRoot: cwd,
+          containmentRoot: target.containmentRoot,
           label: `cleanup root ${target.path}`
         }
       : {};
     await resolveCleanupRoot(target.path, cleanupOptions);
+    await ensureDir(target.path);
     for (const entryName of installedEntries) {
-      const sourcePath = path.join(installedRoot, entryName);
+      const sourcePath = path.join(layout.installedRoot, entryName);
       const targetPath = path.join(target.path, entryName);
       if (mode === "symlink") {
         await rm(targetPath, { recursive: true, force: true });
@@ -113,7 +115,8 @@ function resolveTarget(cwd: string, target: ManifestTarget): ResolvedTarget {
   return {
     type: target.type,
     path: resolvedPath,
-    configuredPath: target.path
+    configuredPath: target.path,
+    containmentRoot: target.path ? cwd : path.dirname(resolvedPath)
   };
 }
 
