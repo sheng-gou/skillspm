@@ -9,19 +9,27 @@
 ![Import_+_Sync](https://img.shields.io/badge/Import_+_Sync-Multi_Agent-2563EB.svg)
 ![Agent_Friendly](https://img.shields.io/badge/Agent-Friendly-0EA5E9.svg)
 
-**Manage AI agent skills like a real environment**
+**Package-manager-style Skills environments for AI agents**
 
 English | [中文](README.zh-CN.md)
 
 </div>
 
-Reproduce, sync, inspect, and reuse skills across projects and agents.
+`skills` uses a `skills.yaml` file as the source of truth for a reusable skills environment.
+
+Core workflow:
+
+- install
+- freeze
+- sync
+- import
+- inspect
 
 ## Why this exists
 
 AI coding agents are getting better at using skills, but skill management is still messy.
 
-Today, most teams still:
+Teams still:
 
 - copy skill folders by hand
 - reinstall the same skills across multiple agents
@@ -29,34 +37,38 @@ Today, most teams still:
 - create ad-hoc skill folders with no version or metadata
 - struggle to move an existing setup from one agent to another
 
-`skills` turns that into a repeatable workflow.
+`skills` turns that into a reproducible workflow centered around `skills.yaml`.
 
-## Highlights
+## Core commands
 
-### Clone a repo, run one command, get the same skills
-
-```bash
-skills bootstrap
-```
-
-### Import once, sync anywhere
-
-```bash
-skills import --from openclaw
-skills sync claude_code
-```
-
-### Turn AI-generated folders into managed skills
-
-```bash
-skills inspect ./my-skill --write
-```
-
-### Use both project-local and global skills
+### Install a skills environment from `skills.yaml`
 
 ```bash
 skills install
-skills install -g
+```
+
+### Freeze the current environment into `skills.lock`
+
+```bash
+skills freeze
+```
+
+### Sync installed skills to another agent
+
+```bash
+skills sync claude_code
+```
+
+### Import an existing setup
+
+```bash
+skills import --from openclaw
+```
+
+### Turn a raw folder into a managed skill
+
+```bash
+skills inspect ./my-skill --write
 ```
 
 ## Requirements
@@ -66,88 +78,205 @@ skills install -g
 
 ## Install
 
-### For users
-
 ```bash
 npm install -g skills
 ```
 
-### For local development
-
-```bash
-npm install
-npm test
-```
-
 ## Quick start
 
-### Project scope
+### 1. Define your environment in `skills.yaml`
 
-```bash
-skills init
-skills add ./local-skills/my-skill
-skills bootstrap
+```yaml
+schema: skills/v1
+
+skills:
+  - id: local/code-review
+    path: ./local-skills/code-review
+
+targets:
+  - type: openclaw
+    enabled: true
+  - type: claude_code
+    enabled: true
 ```
 
-### Global scope
+### 2. Install it
 
 ```bash
-skills init -g
-skills add -g ~/.skills/local-skills/my-skill
-skills bootstrap -g
+skills install
 ```
+
+### 3. Sync it to an agent
+
+```bash
+skills sync claude_code
+```
+
+### 4. Freeze the current state
+
+```bash
+skills freeze
+```
+
+## `skills.yaml`
+
+`skills.yaml` is the source of truth for a skills environment.
+
+It declares:
+
+- which skills belong to this environment
+- where those skills come from
+- which agents or targets should receive them
+- optional install and sync behavior
+
+`skills install` reads `skills.yaml` and installs the environment.  
+`skills freeze` writes the resolved state into `skills.lock`.  
+`skills sync` pushes the installed environment to one or more agents.
+
+### Minimal example
+
+```yaml
+schema: skills/v1
+
+skills:
+  - id: local/code-review
+    path: ./local-skills/code-review
+
+targets:
+  - type: openclaw
+    enabled: true
+  - type: claude_code
+    enabled: true
+```
+
+### Example with sources
+
+```yaml
+schema: skills/v1
+
+sources:
+  - name: community
+    type: index
+    url: ./skills-index.yaml
+
+skills:
+  - id: openai/code-review
+    version: ^1.2.0
+    source: community
+
+  - id: local/release-check
+    path: ./local-skills/release-check
+
+targets:
+  - type: openclaw
+    enabled: true
+  - type: codex
+    enabled: true
+
+settings:
+  auto_sync: true
+```
+
+### Key fields
+
+- `schema`: manifest version
+- `sources`: optional skill sources such as an index
+- `skills`: the root skills in this environment
+- `targets`: where installed skills should be synced
+- `settings`: optional behavior such as `auto_sync`
+
+### Skill entries
+
+A skill can be declared in two common ways:
+
+#### Local path skill
+
+```yaml
+- id: local/code-review
+  path: ./local-skills/code-review
+```
+
+#### Indexed skill
+
+```yaml
+- id: openai/code-review
+  version: ^1.2.0
+  source: community
+```
+
+In short:
+
+- use `path` for local skills
+- use `id + version + source` for skills resolved from an index
+
+## `skills.lock`
+
+`skills.lock` stores the frozen, resolved state of a skills environment.
+
+If `skills.yaml` describes:
+
+> what I want
+
+then `skills.lock` records:
+
+> what was actually resolved and installed
+
+It is mainly used to lock the resolved skills versions and sources, so the same environment can be reproduced later across machines, repos, and agents.
+
+### What it is for
+
+- locking the resolved skills versions
+- recording where each skill came from
+- making installs reproducible
+- helping humans and agents use the same environment
+
+### Typical workflow
+
+- edit `skills.yaml` to describe the desired environment
+- run `skills install` to resolve and install it
+- run `skills freeze` to write the resolved state into `skills.lock`
+
+### In short
+
+- `skills.yaml` = desired environment
+- `skills.lock` = frozen installed environment
 
 ## Common workflows
 
-### Bootstrap a repo-local skills environment
+### Manage a repo-local skills environment
 
 ```bash
-skills bootstrap
+skills install
+skills sync
+skills freeze
 ```
 
-Installs the current scope, writes `skills.lock`, runs diagnostics, and syncs if `auto_sync` is enabled.
+### Manage a global skills baseline
+
+```bash
+skills install -g
+skills sync -g
+skills freeze -g
+```
 
 ### Import existing skills from OpenClaw
 
 ```bash
-skills init -g
-skills import -g --from openclaw
-skills install -g
-skills sync -g
-```
-
-### Add a new target agent
-
-```bash
-skills target add claude_code
-skills sync claude_code
+skills import --from openclaw
+skills install
+skills sync
 ```
 
 ### Normalize a newly created skill folder
 
 ```bash
 skills inspect ./scratch/my-new-skill --write
-skills add ./scratch/my-new-skill
-skills bootstrap
-```
-
-`skills inspect` can generate or complete a minimal `skill.yaml`:
-
-- `id`
-- `name`
-- `version` (defaults to `0.1.0`)
-- `package`
-- `dependencies`
-
-### Export a machine-readable snapshot
-
-```bash
-skills snapshot --json
+skills install
 ```
 
 ## How it works
 
-### Project scope
+### Project scope (default)
 
 ```text
 repo/
@@ -158,7 +287,7 @@ repo/
     └── imported/
 ```
 
-### Global scope
+### Global scope (`-g`)
 
 ```text
 ~/.skills/
@@ -175,41 +304,40 @@ Recommended precedence:
 ### Core files
 
 - `skills.yaml`: manifest for the current scope
-- `skills.lock`: resolved installation state
+- `skills.lock`: frozen installation state
 - `skill.yaml`: per-skill metadata
 
-## Commands
+## Core commands reference
 
 | Command | Description |
 |---|---|
-| `skills init [-g]` | Initialize project or global scope |
-| `skills add <skill> [-g]` | Add a root skill |
-| `skills remove <skill> [-g]` | Remove a root skill |
-| `skills install [-g]` | Resolve and install skills |
-| `skills bootstrap [-g]` | Install + doctor (+ sync if enabled) |
-| `skills import [-g] --from <source>` | Import skills from an agent or local path |
-| `skills inspect <path> --write` | Generate or complete `skill.yaml` |
+| `skills install [-g]` | Resolve and install the skills declared in `skills.yaml` |
+| `skills freeze [-g]` | Write the current installation state into `skills.lock` |
+| `skills sync [target] [-g]` | Sync installed skills to one or more targets |
+| `skills import --from <source> [-g]` | Import skills from an agent or local path |
+| `skills inspect <path> --write` | Generate or complete `skill.yaml` for a raw skill folder |
+
+## Other commands
+
+| Command | Description |
+|---|---|
 | `skills snapshot [--json] [-g]` | Export the current skills environment |
-| `skills list [--resolved] [--json] [-g]` | Show skills in the current scope |
-| `skills freeze [-g]` | Write current installation state to lockfile |
-| `skills target add <target> [-g]` | Add a target agent |
-| `skills sync [target] [-g]` | Sync installed skills to targets |
 | `skills doctor [--json] [-g]` | Diagnose environment health |
+| `skills init [-g]` | Create a starter `skills.yaml` for a project or global scope |
+| `skills add <skill> [-g]` | Add a root skill entry to `skills.yaml` |
+| `skills remove <skill> [-g]` | Remove a root skill entry from `skills.yaml` |
+| `skills list [--resolved] [--json] [-g]` | Show skills in the current scope |
 | `skills why <skill> [-g]` | Explain why a skill is installed |
+| `skills target add <target> [-g]` | Add a target agent to the current scope |
+| `skills bootstrap [-g]` | Shortcut for `install + doctor (+ sync if enabled)` |
 
 ## For agents
 
 If a repo contains `skills.yaml`, an agent should usually run:
 
 ```bash
-skills bootstrap
-```
-
-If a new target agent is added:
-
-```bash
-skills target add <target>
-skills sync <target>
+skills install
+skills doctor --json
 ```
 
 If a newly created skill folder lacks metadata:
@@ -218,7 +346,7 @@ If a newly created skill folder lacks metadata:
 skills inspect <path> --write
 ```
 
-For more guidance, see `AGENTS.md`.
+Detailed agent-facing instructions should live in `AGENTS.md`.
 
 ## Current scope
 
