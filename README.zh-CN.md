@@ -6,7 +6,7 @@
 
 它负责维护 manifest、解析依赖、安装本地工作集、同步到不同 Agent 目录，并用 `skills.lock` 固化结果。
 
-## V1.1 核心心智模型
+## V1.2 核心心智模型
 
 - **项目作用域** 默认开启：`./skills.yaml`、`./skills.lock`、`./.skills/installed/`
 - **全局作用域** 通过 `-g` / `--global` 显式启用：`~/.skills/skills.yaml`、`~/.skills/skills.lock`、`~/.skills/installed/`
@@ -49,14 +49,14 @@ skills add ./scratch/my-new-skill
 skills bootstrap
 ```
 
-`skills inspect` 会补一个最小可用的 `skill.yaml`：
+`skills inspect` 要求目录里已经有 `SKILL.md`，然后再补一个最小可用的 `skill.yaml`：
 
 - `id`：缺失时默认用文件夹名
 - `version`：缺失时默认 `0.1.0`
 - `dependencies`：缺失时默认 `[]`
 - `package`：默认 `dir` + `./`
 
-如果还没有 `SKILL.md`，后续 `skills doctor` 会明确报出来。
+如果还没有 `SKILL.md`，`skills inspect` 会直接失败并提示先补上。
 
 ## 快速开始
 
@@ -88,13 +88,17 @@ skills doctor -g
 
 - `skills init [-g]`：初始化 `skills.yaml` 和当前作用域的安装根目录
 - `skills add <skill> [-g]`：向 `skills.yaml` 添加 `id[@range]` 或本地路径
+- `skills remove <skill> [-g]`：从 `skills.yaml` 删除一个根 skill
 - `skills install [-g]`：解析依赖、安装 skills、写入 `skills.lock`；当 `settings.auto_sync: true` 时自动同步
 - `skills bootstrap [-g]`：相当于 `install` + `doctor`
+- `skills freeze [-g]`：根据当前已安装状态重写 `skills.lock`
 - `skills import [-g] [--from <source>]`：扫描 `openclaw`、`codex`、`claude_code` 或本地路径，并合并进 `skills.yaml`
-- `skills inspect <path> [--write] [--set-version <v>]`：检查本地 skill 目录并生成最小 metadata
+- `skills inspect <path> [--write] [--set-version <v>] [--json]`：检查本地 skill 目录并生成最小 metadata
 - `skills sync [-g] [target] [--mode <copy|symlink>]`：把已安装 skills 同步到启用目标或单个目标
+- `skills target add <target> [-g]`：向 `skills.yaml` 添加内置同步目标（`openclaw`、`codex` 或 `claude_code`）
 - `skills doctor [-g] [--json]`：校验 manifest、已安装技能、`SKILL.md`、`skill.yaml`、二进制依赖和环境变量
-- `skills list [-g] [--resolved]`：查看根技能或完整解析结果
+- `skills list [-g] [--resolved] [--json]`：查看根技能或完整解析结果
+- `skills snapshot [-g] [--resolved] [--json]`：汇总当前选中技能环境的状态
 - `skills why [-g] <skill>`：解释某个 skill 为什么会被安装
 
 ## 作用域布局
@@ -214,11 +218,24 @@ skills inspect ./my-skill --set-version 0.2.0 --write
 
 行为规则：
 
+- `SKILL.md` 必须先存在
 - 没有 `skill.yaml` 就生成最小版本
 - 没有 `id` 就用文件夹名
 - 没有 `version` 就用 `0.1.0`
 - 没有 `dependencies` 就用 `[]`
-- 没有 `SKILL.md` 的话，安装后 `doctor` 会报出来
+
+## `skills list --json` 与 `skills snapshot --json`
+
+自动化场景可以直接使用：
+
+```bash
+skills list --json
+skills list --resolved --json
+skills snapshot --json
+skills snapshot --resolved --json
+```
+
+这些报告会输出当前作用域下的结构化信息，包括根技能、解析结果、targets 状态和时间戳。
 
 ## `skills doctor --json`
 

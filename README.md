@@ -6,7 +6,7 @@ Chinese README: [README.zh-CN.md](README.zh-CN.md)
 
 It manages a manifest, resolves dependencies, installs a local working set, syncs into agent-specific folders, and keeps the result reproducible with `skills.lock`.
 
-## V1.1 quick mental model
+## V1.2 quick mental model
 
 - **Project scope** is the default: `./skills.yaml`, `./skills.lock`, `./.skills/installed/`
 - **Global scope** is opt-in with `-g` / `--global`: `~/.skills/skills.yaml`, `~/.skills/skills.lock`, `~/.skills/installed/`
@@ -49,14 +49,14 @@ skills add ./scratch/my-new-skill
 skills bootstrap
 ```
 
-`skills inspect` creates or fills in a minimal `skill.yaml`:
+`skills inspect` requires `SKILL.md` and creates or fills in a minimal `skill.yaml`:
 
 - `id`: defaults to the folder name when missing
 - `version`: defaults to `0.1.0` when missing
 - `dependencies`: defaults to `[]`
 - `package`: defaults to `dir` + `./`
 
-If `SKILL.md` is still missing, `skills doctor` will report it.
+If `SKILL.md` is missing, `skills inspect` stops and asks you to add it first.
 
 ## Quick start
 
@@ -88,13 +88,17 @@ skills doctor -g
 
 - `skills init [-g]`: initialize `skills.yaml` and the selected install root
 - `skills add <skill> [-g]`: add `id[@range]` or a local path to `skills.yaml`
+- `skills remove <skill> [-g]`: remove a root skill from `skills.yaml`
 - `skills install [-g]`: resolve dependencies, install skills, write `skills.lock`, and auto-sync when `settings.auto_sync: true`
 - `skills bootstrap [-g]`: effectively `install` + `doctor`
+- `skills freeze [-g]`: rewrite `skills.lock` from the currently installed state
 - `skills import [-g] [--from <source>]`: scan `openclaw`, `codex`, `claude_code`, or a local path and merge discoveries into `skills.yaml`
-- `skills inspect <path> [--write] [--set-version <v>]`: inspect a local skill folder and generate minimal metadata
+- `skills inspect <path> [--write] [--set-version <v>] [--json]`: inspect a local skill folder and generate minimal metadata
 - `skills sync [-g] [target] [--mode <copy|symlink>]`: sync installed skills to enabled targets or a single target
+- `skills target add <target> [-g]`: add a built-in sync target (`openclaw`, `codex`, or `claude_code`) to `skills.yaml`
 - `skills doctor [-g] [--json]`: validate the manifest and installed skills, including `SKILL.md`, `skill.yaml`, binaries, and env requirements
-- `skills list [-g] [--resolved]`: show root or resolved skills
+- `skills list [-g] [--resolved] [--json]`: show root or resolved skills
+- `skills snapshot [-g] [--resolved] [--json]`: summarize the selected skills environment
 - `skills why [-g] <skill>`: explain why a skill is installed
 
 ## Scope layout
@@ -214,11 +218,24 @@ skills inspect ./my-skill --set-version 0.2.0 --write
 
 Behavior:
 
+- `SKILL.md` must already exist
 - if `skill.yaml` is missing, generate a minimal one
 - if `id` is missing, use the folder name
 - if `version` is missing, use `0.1.0`
 - if `dependencies` is missing, use `[]`
-- if `SKILL.md` is missing, `doctor` reports it after install
+
+## `skills list --json` and `skills snapshot --json`
+
+For automation:
+
+```bash
+skills list --json
+skills list --resolved --json
+skills snapshot --json
+skills snapshot --resolved --json
+```
+
+These reports include scope-aware metadata for the selected environment, including root skills, resolved skills, target state, and timestamps.
 
 ## `skills doctor --json`
 

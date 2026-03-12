@@ -132,6 +132,10 @@ export function sanitizeInstalledSkillVersion(version: string): string {
   return sanitized || "unversioned";
 }
 
+export function buildInstalledEntryName(skillId: string, version: string): string {
+  return `${sanitizeSkillId(skillId)}@${sanitizeInstalledSkillVersion(version)}`;
+}
+
 export function detectPlatformOs(): "darwin" | "linux" | "win32" {
   if (os.platform() === "darwin") {
     return "darwin";

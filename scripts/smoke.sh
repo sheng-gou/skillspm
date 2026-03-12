@@ -125,14 +125,45 @@ ${CLI} list >/tmp/skills-list.log
 grep -q "acme/app" /tmp/skills-list.log
 grep -q "local/check" /tmp/skills-list.log
 
+${CLI} list --json >/tmp/skills-list.json
+grep -q '"scope": "project"' /tmp/skills-list.json
+grep -q '"view": "root"' /tmp/skills-list.json
+grep -q '"version_range": "\^1.0.0"' /tmp/skills-list.json
+grep -q '"path": "./local-skills/local-check"' /tmp/skills-list.json
+
 ${CLI} list --resolved >/tmp/skills-list-resolved.log
 grep -q "acme/dep 1.0.0" /tmp/skills-list-resolved.log
+
+${CLI} list --resolved --json >/tmp/skills-list-resolved.json
+grep -q '"view": "resolved"' /tmp/skills-list-resolved.json
+grep -q '"id": "acme/dep"' /tmp/skills-list-resolved.json
+grep -q '"version": "1.0.0"' /tmp/skills-list-resolved.json
+
+${CLI} snapshot >/tmp/skills-snapshot.log
+grep -q "Skills snapshot (project)" /tmp/skills-snapshot.log
+grep -q "Root skills (2)" /tmp/skills-snapshot.log
+grep -q "Resolved skills (3)" /tmp/skills-snapshot.log
+grep -q "Targets (1)" /tmp/skills-snapshot.log
+
+${CLI} snapshot --json >/tmp/skills-snapshot.json
+grep -q '"scope": "project"' /tmp/skills-snapshot.json
+grep -q '"root_skills"' /tmp/skills-snapshot.json
+grep -q '"resolved_skills"' /tmp/skills-snapshot.json
+grep -q '"targets"' /tmp/skills-snapshot.json
+grep -q '"generated_at"' /tmp/skills-snapshot.json
+
+${CLI} snapshot --resolved --json >/tmp/skills-snapshot-resolved.json
+grep -q '"resolution_source": "live"' /tmp/skills-snapshot-resolved.json
+grep -q '"id": "acme/app"' /tmp/skills-snapshot-resolved.json
 
 ${CLI} why acme/dep >/tmp/skills-why.log
 grep -q "acme/app -> acme/dep" /tmp/skills-why.log
 
 ${CLI} doctor >/tmp/skills-doctor.log
 grep -q "Result: healthy" /tmp/skills-doctor.log
+
+${CLI} doctor --json >/tmp/skills-doctor-healthy.json
+grep -q '"result": "healthy"' /tmp/skills-doctor-healthy.json
 
 cat > skills.lock <<'EOF'
 schema: skills-lock/v1
@@ -1069,6 +1100,131 @@ test -f skills.lock
 test -d .skills/installed/local__bootstrap-check@0.12.0
 grep -q "Result: healthy" /tmp/skills-bootstrap.log
 
+TARGET_ADD_DIR="${TMP_DIR}/target-add-workspace"
+mkdir -p "${TARGET_ADD_DIR}"
+cd "${TARGET_ADD_DIR}"
+
+${CLI} init >/tmp/skills-target-add-init.log
+${CLI} target add codex >/tmp/skills-target-add.log
+grep -q "type: codex" skills.yaml
+${CLI} target add codex >/tmp/skills-target-add-noop.log
+grep -q "already exists" /tmp/skills-target-add-noop.log
+
+REMOVE_DIR="${TMP_DIR}/remove-workspace"
+mkdir -p "${REMOVE_DIR}/local-skills/keep-skill" "${REMOVE_DIR}/local-skills/drop-skill"
+cd "${REMOVE_DIR}"
+
+${CLI} init >/tmp/skills-remove-init.log
+
+cat > local-skills/keep-skill/SKILL.md <<'EOF'
+# keep
+EOF
+
+cat > local-skills/keep-skill/skill.yaml <<'EOF'
+schema: skill/v1
+id: local/keep-skill
+name: Keep Skill
+version: 0.20.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > local-skills/drop-skill/SKILL.md <<'EOF'
+# drop
+EOF
+
+cat > local-skills/drop-skill/skill.yaml <<'EOF'
+schema: skill/v1
+id: local/drop-skill
+name: Drop Skill
+version: 0.21.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+${CLI} add ./local-skills/keep-skill >/tmp/skills-remove-add-keep.log
+${CLI} add ./local-skills/drop-skill >/tmp/skills-remove-add-drop.log
+${CLI} install >/tmp/skills-remove-install.log
+test -d .skills/installed/local__drop-skill@0.21.0
+${CLI} remove local/drop-skill >/tmp/skills-remove.log
+! grep -q "local/drop-skill" skills.yaml
+${CLI} bootstrap >/tmp/skills-remove-bootstrap.log
+! test -e .skills/installed/local__drop-skill@0.21.0
+test -d .skills/installed/local__keep-skill@0.20.0
+
+FREEZE_DIR="${TMP_DIR}/freeze-workspace"
+mkdir -p "${FREEZE_DIR}/local-skills/versioned-freeze" "${FREEZE_DIR}/local-skills/unversioned-freeze"
+cd "${FREEZE_DIR}"
+
+${CLI} init >/tmp/skills-freeze-init.log
+
+cat > local-skills/versioned-freeze/SKILL.md <<'EOF'
+# versioned freeze
+EOF
+
+cat > local-skills/versioned-freeze/skill.yaml <<'EOF'
+schema: skill/v1
+id: local/versioned-freeze
+name: Versioned Freeze
+version: 0.30.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > local-skills/unversioned-freeze/SKILL.md <<'EOF'
+# unversioned freeze
+EOF
+
+${CLI} add ./local-skills/versioned-freeze >/tmp/skills-freeze-add-versioned.log
+${CLI} add ./local-skills/unversioned-freeze >/tmp/skills-freeze-add-unversioned.log
+${CLI} install >/tmp/skills-freeze-install.log
+rm -f skills.lock
+${CLI} freeze >/tmp/skills-freeze.log
+grep -q "Updated skills.lock from installed state" /tmp/skills-freeze.log
+grep -q "local/versioned-freeze" skills.lock
+grep -q "version: 0.30.0" skills.lock
+grep -q "local/unversioned-freeze" skills.lock
+grep -q "version: unversioned" skills.lock
+
+FREEZE_LINK_DIR="${TMP_DIR}/freeze-link-workspace"
+FREEZE_LINK_OUTSIDE="${TMP_DIR}/freeze-link-outside"
+mkdir -p "${FREEZE_LINK_DIR}" "${FREEZE_LINK_OUTSIDE}/local__freeze-link-check@0.31.0"
+cd "${FREEZE_LINK_DIR}"
+
+${CLI} init >/tmp/skills-freeze-link-init.log
+
+cat > "${FREEZE_LINK_OUTSIDE}/local__freeze-link-check@0.31.0/SKILL.md" <<'EOF'
+# freeze link
+EOF
+
+cat > "${FREEZE_LINK_OUTSIDE}/local__freeze-link-check@0.31.0/skill.yaml" <<'EOF'
+schema: skill/v1
+id: local/freeze-link-check
+name: Freeze Link Check
+version: 0.31.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+ln -s "${FREEZE_LINK_OUTSIDE}" .skills/installed
+
+set +e
+${CLI} freeze >/tmp/skills-freeze-link.log 2>&1
+FREEZE_LINK_EXIT=$?
+set -e
+test "${FREEZE_LINK_EXIT}" -eq 2
+grep -q "cleanup root .*\\.skills/installed resolves outside" /tmp/skills-freeze-link.log
+! test -e skills.lock
+
+SKILLS_ALLOW_UNSAFE_PATHS=1 ${CLI} freeze >/tmp/skills-freeze-link-unsafe.log
+grep -q "Updated skills.lock from installed state" /tmp/skills-freeze-link-unsafe.log
+grep -q "local/freeze-link-check" skills.lock
+grep -q "version: 0.31.0" skills.lock
+
 INSPECT_DIR="${TMP_DIR}/inspect-workspace"
 mkdir -p "${INSPECT_DIR}/skill-without-yaml" "${INSPECT_DIR}/skill-without-doc"
 cd "${INSPECT_DIR}"
@@ -1077,25 +1233,24 @@ cat > skill-without-yaml/SKILL.md <<'EOF'
 # inspect
 EOF
 
+${CLI} inspect ./skill-without-yaml --json >/tmp/skills-inspect.json
+grep -q '"schema": {' /tmp/skills-inspect.json
+grep -q '"category": "generated"' /tmp/skills-inspect.json
+grep -q '"description": {' /tmp/skills-inspect.json
+grep -q '"category": "missing"' /tmp/skills-inspect.json
+
 ${CLI} inspect ./skill-without-yaml --set-version 0.3.1 --write >/tmp/skills-inspect-write.log
 grep -q '^id: skill-without-yaml$' skill-without-yaml/skill.yaml
 grep -q '^version: 0.3.1$' skill-without-yaml/skill.yaml
 grep -q '^dependencies: \[\]$' skill-without-yaml/skill.yaml
 
-${CLI} inspect ./skill-without-doc --write >/tmp/skills-inspect-missing-doc.log
-grep -q '^id: skill-without-doc$' skill-without-doc/skill.yaml
-
-${CLI} init >/tmp/skills-inspect-init.log
-${CLI} add ./skill-without-doc >/tmp/skills-inspect-add.log
-${CLI} install >/tmp/skills-inspect-install.log
-
 set +e
-${CLI} doctor --json >/tmp/skills-doctor.json 2>&1
-DOCTOR_JSON_EXIT=$?
+${CLI} inspect ./skill-without-doc --write >/tmp/skills-inspect-missing-doc.log 2>&1
+INSPECT_MISSING_DOC_EXIT=$?
 set -e
-test "${DOCTOR_JSON_EXIT}" -eq 6
-grep -q '"result": "failed"' /tmp/skills-doctor.json
-grep -q 'missing SKILL.md' /tmp/skills-doctor.json
+test "${INSPECT_MISSING_DOC_EXIT}" -eq 2
+grep -q 'SKILL.md is required' /tmp/skills-inspect-missing-doc.log
+! test -e skill-without-doc/skill.yaml
 
 GLOBAL_SCOPE_DIR="${TMP_DIR}/global-scope-workspace"
 mkdir -p "${GLOBAL_SCOPE_DIR}" "${HOME}/.skills/local-skills/global-check"
@@ -1119,7 +1274,15 @@ ${CLI} init -g >/tmp/skills-global-init.log
 test -f "${HOME}/.skills/skills.yaml"
 test -d "${HOME}/.skills/installed"
 ${CLI} add -g "${HOME}/.skills/local-skills/global-check" >/tmp/skills-global-add.log
+${CLI} target add -g openclaw >/tmp/skills-global-target-openclaw.log
+${CLI} target add -g codex >/tmp/skills-global-target-add.log
+grep -q "type: openclaw" "${HOME}/.skills/skills.yaml"
+grep -q "type: codex" "${HOME}/.skills/skills.yaml"
 ${CLI} install -g >/tmp/skills-global-install.log
+${CLI} list -g --json >/tmp/skills-global-list.json
+grep -q '"scope": "global"' /tmp/skills-global-list.json
+${CLI} snapshot -g --json >/tmp/skills-global-snapshot.json
+grep -q '"scope": "global"' /tmp/skills-global-snapshot.json
 ${CLI} sync -g >/tmp/skills-global-sync.log
 
 test -f "${HOME}/.skills/skills.lock"

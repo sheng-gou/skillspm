@@ -3,7 +3,7 @@ import { loadLockfile } from "./lockfile";
 import { loadManifest } from "./manifest";
 import type { ScopeLayout } from "./scope";
 import { loadSkillMetadata, resolveSkillMarkdownPath } from "./skill";
-import { detectPlatformOs, exists, printInfo, printWarning, sanitizeInstalledSkillVersion, sanitizeSkillId } from "./utils";
+import { buildInstalledEntryName, detectPlatformOs, exists, printInfo, printWarning } from "./utils";
 
 export interface DoctorFinding {
   level: "info" | "warning" | "error";
@@ -83,7 +83,7 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
     });
 
     for (const [skillId, node] of Object.entries(lockfile.resolved)) {
-      const installDir = path.join(layout.installedRoot, `${sanitizeSkillId(skillId)}@${sanitizeInstalledSkillVersion(node.version)}`);
+      const installDir = path.join(layout.installedRoot, buildInstalledEntryName(skillId, node.version));
       if (!(await exists(installDir))) {
         errorCount += 1;
         findings.push({

@@ -5,14 +5,13 @@ import { resolveStateContainmentRoot } from "./scope";
 import type { ScopeLayout } from "./scope";
 import type { SkillsLock, SkillsManifest } from "./types";
 import {
+  buildInstalledEntryName,
   copyDir,
   ensureDir,
   printInfo,
   printSuccess,
   removeStaleRootEntries,
-  resolveCleanupRoot,
-  sanitizeInstalledSkillVersion,
-  sanitizeSkillId
+  resolveCleanupRoot
 } from "./utils";
 
 export interface InstallProjectResult {
@@ -31,11 +30,11 @@ export async function installProject(layout: ScopeLayout): Promise<InstallProjec
   });
   await ensureDir(layout.installedRoot);
   const sortedNodes = [...resolution.nodes.values()].sort((left, right) => left.id.localeCompare(right.id));
-  const desiredEntries = sortedNodes.map((node) => installedEntryName(node.id, node.version));
+  const desiredEntries = sortedNodes.map((node) => buildInstalledEntryName(node.id, node.version));
 
   printInfo("Installing...");
   for (const node of sortedNodes) {
-    const targetDir = path.join(layout.installedRoot, installedEntryName(node.id, node.version));
+    const targetDir = path.join(layout.installedRoot, buildInstalledEntryName(node.id, node.version));
     await copyDir(node.installPath, targetDir);
     printSuccess(`Installed ${node.id}@${node.version}`);
   }
@@ -67,8 +66,4 @@ export async function installProject(layout: ScopeLayout): Promise<InstallProjec
     lockfile,
     manifest: resolution.manifest
   };
-}
-
-function installedEntryName(skillId: string, version: string): string {
-  return `${sanitizeSkillId(skillId)}@${sanitizeInstalledSkillVersion(version)}`;
 }
