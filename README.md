@@ -1,78 +1,89 @@
 # skills
 
-Chinese README: [README.zh-CN.md](README.zh-CN.md)
+<div align="center">
 
-`skills` is a CLI for reproducible AI agent skills environments.
+[![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)](#)
+[![Codex](https://img.shields.io/badge/Codex-Supported-111111.svg)](#)
+[![Claude_Code](https://img.shields.io/badge/Claude_Code-Supported-D97706.svg)](#)
+[![Project_+_Global](https://img.shields.io/badge/Project_+_Global-Scopes-16A34A.svg)](#)
+[![Import_+_Sync](https://img.shields.io/badge/Import_+_Sync-Multi_Agent-2563EB.svg)](#)
+[![Agent_Friendly](https://img.shields.io/badge/Agent-Friendly-0EA5E9.svg)](#)
 
-It manages a manifest, resolves dependencies, installs a local working set, syncs into agent-specific folders, and keeps the result reproducible with `skills.lock`.
+**Manage AI agent skills like a real environment**
 
-## V1.2 quick mental model
+English | [中文](README.zh-CN.md)
 
-- **Project scope** is the default: `./skills.yaml`, `./skills.lock`, `./.skills/installed/`
-- **Global scope** is opt-in with `-g` / `--global`: `~/.skills/skills.yaml`, `~/.skills/skills.lock`, `~/.skills/installed/`
-- Recommended precedence when both exist: **project > global**
-- Use **project scope** for repo-specific skills
-- Use **global scope** for your portable personal baseline
+</div>
 
-## Wow paths
+Manage AI agent skills like a real environment.
 
-### 1) Clone a repo and bootstrap it
+Reproduce, sync, inspect, and reuse skills across projects and agents.
 
-```bash
-npm install
-npm run build
+## Why this exists
 
-node dist/cli.js init
-node dist/cli.js add ./local-skills/my-skill
-node dist/cli.js bootstrap
-```
+AI coding agents are getting good at using skills, but skill management is still messy.
 
-`skills bootstrap` is the fast path for **install + doctor** (and it also syncs when `settings.auto_sync: true`).
+Today, most teams still:
 
-### 2) Import once, sync anywhere
+- copy skill folders by hand
+- reinstall the same skills across multiple agents
+- lose track of which repo depends on which skills
+- create ad-hoc skill folders with no version or metadata
+- struggle to move an existing setup from one agent to another
 
-```bash
-skills init -g
-skills import -g --from openclaw
-skills install -g
-skills sync -g
-skills sync -g codex --mode symlink
-```
+`skills` turns that into a repeatable workflow.
 
-This lets you keep a reusable global skills environment in `~/.skills/` and project it into OpenClaw, Codex, Claude Code, or a generic directory.
+## What feels different
 
-### 3) Turn an AI-generated folder into a managed skill
+### Clone a repo, run one command, get the same skills
 
 ```bash
-skills inspect ./scratch/my-new-skill --write
-skills add ./scratch/my-new-skill
 skills bootstrap
 ```
 
-`skills inspect` requires `SKILL.md` and creates or fills in a minimal `skill.yaml`:
+### Import once, sync anywhere
 
-- `id`: defaults to the folder name when missing
-- `version`: defaults to `0.1.0` when missing
-- `dependencies`: defaults to `[]`
-- `package`: defaults to `dir` + `./`
+```bash
+skills import --from openclaw
+skills sync claude_code
+```
 
-If `SKILL.md` is missing, `skills inspect` stops and asks you to add it first.
+### Turn AI-generated folders into managed skills
 
-## Quick start
+```bash
+skills inspect ./my-skill --write
+```
 
-### Install from npm
+### Use both project-local and global skills
+
+```bash
+skills install
+skills install -g
+```
+
+## Install
+
+### For users
 
 ```bash
 npm install -g skills
 ```
+
+### For local development
+
+```bash
+npm install
+npm test
+```
+
+## Quick start
 
 ### Project scope
 
 ```bash
 skills init
 skills add ./local-skills/my-skill
-skills install
-skills doctor
+skills bootstrap
 ```
 
 ### Global scope
@@ -80,30 +91,60 @@ skills doctor
 ```bash
 skills init -g
 skills add -g ~/.skills/local-skills/my-skill
-skills install -g
-skills doctor -g
+skills bootstrap -g
 ```
 
-## Commands
+## Common workflows
 
-- `skills init [-g]`: initialize `skills.yaml` and the selected install root
-- `skills add <skill> [-g]`: add `id[@range]` or a local path to `skills.yaml`
-- `skills remove <skill> [-g]`: remove a root skill from `skills.yaml`
-- `skills install [-g]`: resolve dependencies, install skills, write `skills.lock`, and auto-sync when `settings.auto_sync: true`
-- `skills bootstrap [-g]`: effectively `install` + `doctor`
-- `skills freeze [-g]`: rewrite `skills.lock` from the currently installed state
-- `skills import [-g] [--from <source>]`: scan `openclaw`, `codex`, `claude_code`, or a local path and merge discoveries into `skills.yaml`
-- `skills inspect <path> [--write] [--set-version <v>] [--json]`: inspect a local skill folder and generate minimal metadata
-- `skills sync [-g] [target] [--mode <copy|symlink>]`: sync installed skills to enabled targets or a single target
-- `skills target add <target> [-g]`: add a built-in sync target (`openclaw`, `codex`, or `claude_code`) to `skills.yaml`
-- `skills doctor [-g] [--json]`: validate the manifest and installed skills, including `SKILL.md`, `skill.yaml`, binaries, and env requirements
-- `skills list [-g] [--resolved] [--json]`: show root or resolved skills
-- `skills snapshot [-g] [--resolved] [--json]`: summarize the selected skills environment
-- `skills why [-g] <skill>`: explain why a skill is installed
+### Bootstrap a repo-local skills environment
 
-## Scope layout
+```bash
+skills bootstrap
+```
 
-### Project scope (default)
+Installs the current scope, writes `skills.lock`, runs diagnostics, and syncs if `auto_sync` is enabled.
+
+### Import existing skills from OpenClaw
+
+```bash
+skills init -g
+skills import -g --from openclaw
+skills install -g
+skills sync -g
+```
+
+### Add a new target agent
+
+```bash
+skills target add claude_code
+skills sync claude_code
+```
+
+### Normalize a newly created skill folder
+
+```bash
+skills inspect ./scratch/my-new-skill --write
+skills add ./scratch/my-new-skill
+skills bootstrap
+```
+
+`skills inspect` can generate or complete a minimal `skill.yaml`:
+
+- `id`
+- `name`
+- `version` (defaults to `0.1.0`)
+- `package`
+- `dependencies`
+
+### Export a machine-readable snapshot
+
+```bash
+skills snapshot --json
+```
+
+## How it works
+
+### Project scope
 
 ```text
 repo/
@@ -114,7 +155,7 @@ repo/
     └── imported/
 ```
 
-### Global scope (`-g`)
+### Global scope
 
 ```text
 ~/.skills/
@@ -124,163 +165,82 @@ repo/
 └── imported/
 ```
 
-### Current scope rule
+Recommended precedence:
 
-There is no automatic scope switching: every command is either:
+- project > global
 
-- **project scope** by default, or
-- **global scope** when you pass `-g`
+### Core files
 
-If both scopes exist, treat them as separate environments and prefer **project scope** for repo work.
+- `skills.yaml`: manifest for the current scope
+- `skills.lock`: resolved installation state
+- `skill.yaml`: per-skill metadata
 
-## Agent usage
+## Commands
 
-### OpenClaw
+| Command | Description |
+|---|---|
+| `skills init [-g]` | Initialize project or global scope |
+| `skills add <skill> [-g]` | Add a root skill |
+| `skills remove <skill> [-g]` | Remove a root skill |
+| `skills install [-g]` | Resolve and install skills |
+| `skills bootstrap [-g]` | Install + doctor (+ sync if enabled) |
+| `skills import [-g] --from <source>` | Import skills from an agent or local path |
+| `skills inspect <path> --write` | Generate or complete `skill.yaml` |
+| `skills snapshot [--json] [-g]` | Export the current skills environment |
+| `skills list [--resolved] [--json] [-g]` | Show skills in the current scope |
+| `skills freeze [-g]` | Write current installation state to lockfile |
+| `skills target add <target> [-g]` | Add a target agent |
+| `skills sync [target] [-g]` | Sync installed skills to targets |
+| `skills doctor [--json] [-g]` | Diagnose environment health |
+| `skills why <skill> [-g]` | Explain why a skill is installed |
 
-```bash
-skills sync
-```
+## For agents
 
-Defaults to `~/.openclaw/skills` when no targets are configured.
-
-### Codex
-
-```bash
-skills sync codex --mode symlink
-```
-
-Defaults to `~/.codex/skills`.
-
-### Claude Code
-
-```bash
-skills sync claude_code
-```
-
-Defaults to `~/.claude/skills`.
-
-### Generic target
-
-Add an explicit path in `skills.yaml`:
-
-```yaml
-targets:
-  - type: generic
-    path: ./.agent-skills
-```
-
-## Manifest example
-
-```yaml
-schema: skills/v1
-project:
-  name: demo
-sources:
-  - name: local-index
-    type: index
-    url: ./fixtures/index.yaml
-skills:
-  - id: acme/hello
-    version: ^1.0.0
-    source: local-index
-  - id: local/release-check
-    path: ./local-skills/release-check
-targets:
-  - type: openclaw
-    enabled: true
-  - type: generic
-    path: ./.agent-skills
-settings:
-  install_mode: copy
-  auto_sync: false
-  strict: false
-```
-
-## Import and vendoring
-
-`skills import` keeps existing manifest entries and appends newly discovered skills by `id`.
-
-When a discovered skill lives outside the managed root, `skills` vendors it into the managed environment and records a safe local `path` entry:
-
-- project scope → `./.skills/imported/`
-- global scope → `~/.skills/imported/`
-
-That keeps installs reproducible without requiring `SKILLS_ALLOW_UNSAFE_PATHS=1`.
-
-## `skills inspect`
-
-Use it when a folder has some skill content but incomplete metadata.
+If a repo contains `skills.yaml`, an agent should usually run:
 
 ```bash
-skills inspect ./my-skill
-skills inspect ./my-skill --set-version 0.2.0 --write
+skills bootstrap
 ```
 
-Behavior:
-
-- `SKILL.md` must already exist
-- if `skill.yaml` is missing, generate a minimal one
-- if `id` is missing, use the folder name
-- if `version` is missing, use `0.1.0`
-- if `dependencies` is missing, use `[]`
-
-## `skills list --json` and `skills snapshot --json`
-
-For automation:
+If a new target agent is added:
 
 ```bash
-skills list --json
-skills list --resolved --json
-skills snapshot --json
-skills snapshot --resolved --json
+skills target add <target>
+skills sync <target>
 ```
 
-These reports include scope-aware metadata for the selected environment, including root skills, resolved skills, target state, and timestamps.
-
-## `skills doctor --json`
-
-For automation:
+If a newly created skill folder lacks metadata:
 
 ```bash
-skills doctor --json
-skills doctor -g --json
+skills inspect <path> --write
 ```
 
-The JSON report includes:
+For more guidance, see `AGENTS.md`.
 
-- scope
-- root directory
-- installed root
-- warning/error counts
-- per-finding messages
-- overall result: `healthy`, `warnings`, or `failed`
+## Current scope
 
-## Path safety defaults
+What works today:
 
-By default, `skills` blocks outside-root configured paths and requires each installed skill root to include at least one marker file:
+- project scope and global scope
+- manifest + lockfile workflow
+- import from OpenClaw / Codex / Claude Code / local path
+- sync to OpenClaw / Codex / Claude Code / generic target
+- inspect and generate minimal `skill.yaml`
+- snapshot and list with JSON output
+- doctor with JSON output
 
-- `SKILL.md` or `skill.yaml` must exist in each skill root during `install`
-- configured paths that resolve outside the selected managed root are rejected, including `../...`, explicit absolute paths, `file://` paths, and symlink escapes after realpath resolution
+## Current limitations
 
-If you need legacy behavior, opt in explicitly:
+Not implemented yet or still limited:
 
-```bash
-SKILLS_ALLOW_UNSAFE_PATHS=1 skills install
-SKILLS_ALLOW_UNSAFE_PATHS=1 skills install -g
-```
+- git source install
+- remote registry / auth / download flows
+- automatic dependency inference for new skills
+- deeper host compatibility rules
 
-## Current truthful limits
-
-Still not implemented:
-
-- Git source install: `sources[].type: git` is accepted by schema validation, but `skills install` does **not** fetch or install git sources yet
-- Remote registry/auth/download flows
-- Publish workflows or artifact fetching beyond local file-backed indexes and local paths
-
-## Local development
+## Development
 
 ```bash
 npm install
-npm run build
 npm test
 ```
