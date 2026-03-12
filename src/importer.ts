@@ -4,7 +4,16 @@ import { CliError } from "./errors";
 import { createDefaultManifest, loadManifest } from "./manifest";
 import { loadSkillMetadata } from "./skill";
 import type { ManifestSkill, SkillsManifest, TargetType } from "./types";
-import { exists, normalizeRelativePath, printInfo, printWarning } from "./utils";
+import {
+  copyDir,
+  ensureDir,
+  exists,
+  isPathWithinRootReal,
+  normalizeRelativePath,
+  printInfo,
+  printWarning,
+  sanitizeSkillId
+} from "./utils";
 import { resolveDefaultTargetPath } from "./adapter";
 
 const SKIP_SCAN_DIRS = new Set([".git", ".skills", "dist", "node_modules", "vendor"]);
@@ -128,9 +137,12 @@ async function isSkillRoot(candidatePath: string): Promise<boolean> {
 async function createManifestSkill(cwd: string, skillRoot: string): Promise<ManifestSkill> {
   const metadata = await loadSkillMetadata(skillRoot);
   const skillId = metadata?.id ?? `local/${path.basename(skillRoot)}`;
+  const manifestPath = (await isPathWithinRootReal(cwd, skillRoot))
+    ? skillRoot
+    : await vendorImportedSkill(cwd, skillRoot, skillId);
   const skill: ManifestSkill = {
     id: skillId,
-    path: normalizeRelativePath(cwd, skillRoot)
+    path: normalizeRelativePath(cwd, manifestPath)
   };
 
   if (metadata?.version) {
@@ -138,4 +150,12 @@ async function createManifestSkill(cwd: string, skillRoot: string): Promise<Mani
   }
 
   return skill;
+}
+
+async function vendorImportedSkill(cwd: string, skillRoot: string, skillId: string): Promise<string> {
+  const vendorRoot = path.join(cwd, ".skills", "imported");
+  const vendoredPath = path.join(vendorRoot, sanitizeSkillId(skillId));
+  await ensureDir(vendorRoot);
+  await copyDir(skillRoot, vendoredPath, { dereference: true });
+  return vendoredPath;
 }

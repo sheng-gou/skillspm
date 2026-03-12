@@ -63,8 +63,11 @@ async function resolveManifestSkill(
   }
 
   const source = selectSource(context, manifestSkill);
+  if (source.type === "git") {
+    throw new CliError(`Source ${source.name} uses type git. The schema is accepted, but git source install is not implemented yet.`, 3);
+  }
   if (source.type !== "index") {
-    throw new CliError(`Source ${source.name} uses unsupported type ${source.type}. MVP install only supports index sources.`, 3);
+    throw new CliError(`Source ${source.name} uses unsupported type ${source.type}.`, 3);
   }
 
   const { index, indexPath } = await loadIndex(source.url, context.cwd);

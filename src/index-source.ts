@@ -2,7 +2,7 @@ import path from "node:path";
 import semver from "semver";
 import { CliError } from "./errors";
 import type { IndexSkillEntry, IndexVersionEntry, SkillsIndex } from "./types";
-import { assertConfiguredPathWithinRoot, readDocument, resolveFileUrlOrPath } from "./utils";
+import { assertConfiguredPathWithinRootReal, readDocument, resolveFileUrlOrPath } from "./utils";
 
 export interface ResolvedIndexVersion {
   version: string;
@@ -11,7 +11,7 @@ export interface ResolvedIndexVersion {
 
 export async function loadIndex(indexPathOrUrl: string, baseDir: string): Promise<{ index: SkillsIndex; indexPath: string }> {
   const indexPath = resolveFileUrlOrPath(baseDir, indexPathOrUrl);
-  assertConfiguredPathWithinRoot(baseDir, indexPathOrUrl, indexPath, `source index ${indexPathOrUrl}`);
+  await assertConfiguredPathWithinRootReal(baseDir, indexPathOrUrl, indexPath, `source index ${indexPathOrUrl}`);
   const index = await readDocument<unknown>(indexPath) as SkillsIndex;
   validateIndex(index, indexPath);
   return { index, indexPath };

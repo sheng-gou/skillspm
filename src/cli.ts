@@ -13,7 +13,7 @@ import { loadSkillMetadata } from "./skill";
 import type { SkillsManifest } from "./types";
 import {
   MANIFEST_FILE,
-  assertConfiguredPathWithinRoot,
+  assertConfiguredPathWithinRootReal,
   exists,
   formatSkillVersion,
   normalizeRelativePath,
@@ -73,7 +73,7 @@ export async function runCli(argv: string[]): Promise<number> {
       const added = nextManifest.skills[nextManifest.skills.length - 1];
       printSuccess(`Added skill ${describeManifestSkill(added)} to skills.yaml`);
       if (options.install) {
-        await installProject(cwd);
+        await runInstallCommand(cwd);
       }
     });
 
@@ -81,7 +81,7 @@ export async function runCli(argv: string[]): Promise<number> {
     .command("install")
     .description("Resolve and install project skills")
     .action(async () => {
-      await installProject(process.cwd());
+      await runInstallCommand(process.cwd());
     });
 
   program
@@ -211,7 +211,7 @@ async function addSkillToManifest(
 
   if (looksLikePath(input)) {
     const absolutePath = resolveFileUrlOrPath(cwd, input);
-    assertConfiguredPathWithinRoot(cwd, input, absolutePath, `local skill path ${input}`);
+    await assertConfiguredPathWithinRootReal(cwd, input, absolutePath, `local skill path ${input}`);
     if (!(await exists(absolutePath))) {
       throw new CliError(`Local skill path does not exist: ${input}`, 2);
     }
@@ -238,6 +238,13 @@ async function addSkillToManifest(
     ...manifest,
     skills: nextSkills
   };
+}
+
+async function runInstallCommand(cwd: string): Promise<void> {
+  const result = await installProject(cwd);
+  if (result.manifest.settings?.auto_sync) {
+    await syncTargets(cwd, result.manifest);
+  }
 }
 
 function renderHelp(commandName?: string): string {

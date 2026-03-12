@@ -1,4 +1,4 @@
-import { access, cp, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -46,9 +46,57 @@ export async function writeYamlDocument(targetPath: string, value: unknown): Pro
   await writeFile(targetPath, contents, "utf8");
 }
 
-export async function copyDir(source: string, destination: string): Promise<void> {
+export interface CopyDirOptions {
+  dereference?: boolean;
+}
+
+export interface CleanupRootOptions {
+  containmentRoot?: string;
+  label?: string;
+}
+
+export async function copyDir(source: string, destination: string, options: CopyDirOptions = {}): Promise<void> {
   await rm(destination, { recursive: true, force: true });
-  await cp(source, destination, { recursive: true });
+  await cp(source, destination, { recursive: true, dereference: options.dereference ?? false });
+}
+
+export async function resolveCleanupRoot(rootDir: string, options: CleanupRootOptions = {}): Promise<string> {
+  const resolvedRootDir = await resolvePathForContainment(rootDir);
+  if (options.containmentRoot) {
+    await assertPathWithinRootReal(
+      options.containmentRoot,
+      resolvedRootDir,
+      options.label ?? `cleanup root ${rootDir}`
+    );
+  }
+  return resolvedRootDir;
+}
+
+export async function removeStaleRootEntries(
+  rootDir: string,
+  desiredEntries: Iterable<string>,
+  options: CleanupRootOptions = {}
+): Promise<void> {
+  if (!(await exists(rootDir))) {
+    return;
+  }
+
+  const resolvedRootDir = await resolveCleanupRoot(rootDir, options);
+  const desired = new Set(desiredEntries);
+  const entries = await readdir(rootDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) {
+      continue;
+    }
+    if (desired.has(entry.name)) {
+      continue;
+    }
+    const entryPath = path.join(rootDir, entry.name);
+    if (!entry.isSymbolicLink()) {
+      await assertPathWithinRootReal(resolvedRootDir, entryPath, `cleanup entry ${entry.name} in ${rootDir}`);
+    }
+    await rm(entryPath, { recursive: true, force: true });
+  }
 }
 
 export function normalizeRelativePath(cwd: string, targetPath: string): string {

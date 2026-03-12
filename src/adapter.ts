@@ -3,7 +3,7 @@ import path from "node:path";
 import { readdir, rm, symlink } from "node:fs/promises";
 import { CliError } from "./errors";
 import type { InstallMode, ManifestTarget, SkillsManifest, TargetType } from "./types";
-import { copyDir, ensureDir, exists, printInfo, printSuccess } from "./utils";
+import { copyDir, ensureDir, exists, printInfo, printSuccess, removeStaleRootEntries, resolveCleanupRoot } from "./utils";
 
 export interface SyncOptions {
   mode?: string;
@@ -13,6 +13,7 @@ export interface SyncOptions {
 interface ResolvedTarget {
   type: TargetType;
   path: string;
+  configuredPath?: string;
 }
 
 export function resolveInstallMode(mode?: string, fallback?: InstallMode): InstallMode {
@@ -42,9 +43,13 @@ export async function syncTargets(cwd: string, manifest: SkillsManifest, options
   if (!(await exists(installedRoot))) {
     throw new CliError("No installed skills found. Run `skills install` first.", 2);
   }
+  await resolveCleanupRoot(installedRoot, {
+    containmentRoot: cwd,
+    label: `cleanup root ${installedRoot}`
+  });
 
   const installedEntries = (await readdir(installedRoot, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
 
@@ -62,6 +67,13 @@ export async function syncTargets(cwd: string, manifest: SkillsManifest, options
 
   for (const target of targets) {
     await ensureDir(target.path);
+    const cleanupOptions = target.configuredPath
+      ? {
+          containmentRoot: cwd,
+          label: `cleanup root ${target.path}`
+        }
+      : {};
+    await resolveCleanupRoot(target.path, cleanupOptions);
     for (const entryName of installedEntries) {
       const sourcePath = path.join(installedRoot, entryName);
       const targetPath = path.join(target.path, entryName);
@@ -72,6 +84,7 @@ export async function syncTargets(cwd: string, manifest: SkillsManifest, options
         await copyDir(sourcePath, targetPath);
       }
     }
+    await removeStaleRootEntries(target.path, installedEntries, cleanupOptions);
     printSuccess(`${target.type} synced (${mode})`);
   }
 }
@@ -99,7 +112,8 @@ function resolveTarget(cwd: string, target: ManifestTarget): ResolvedTarget {
   }
   return {
     type: target.type,
-    path: resolvedPath
+    path: resolvedPath,
+    configuredPath: target.path
   };
 }
 
