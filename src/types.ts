@@ -101,12 +101,24 @@ export interface LockResolvedNode {
   dependencies?: string[];
 }
 
+export interface LockTargetState {
+  type: TargetType;
+  path: string;
+  configured_path?: string;
+  enabled: boolean;
+  mode: InstallMode;
+  status: "synced";
+  last_synced_at: string;
+  entry_count?: number;
+}
+
 export interface SkillsLock {
   schema: "skills-lock/v1";
   project?: {
     name?: string;
   };
   resolved: Record<string, LockResolvedNode>;
+  targets?: Record<string, LockTargetState>;
   generated_at: string;
 }
 

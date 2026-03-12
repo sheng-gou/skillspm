@@ -1,9 +1,19 @@
 import path from "node:path";
+import { resolveDefaultTargetPath } from "./adapter";
 import { loadLockfile } from "./lockfile";
 import { loadManifest } from "./manifest";
 import type { ScopeLayout } from "./scope";
 import { loadSkillMetadata, resolveSkillMarkdownPath } from "./skill";
-import { buildInstalledEntryName, detectPlatformOs, exists, printInfo, printWarning } from "./utils";
+import type { ManifestTarget } from "./types";
+import {
+  buildInstalledEntryName,
+  detectPlatformOs,
+  exists,
+  printInfo,
+  printWarning,
+  resolveCleanupRoot,
+  resolveFileUrlOrPath
+} from "./utils";
 
 export interface DoctorFinding {
   level: "info" | "warning" | "error";
@@ -62,11 +72,28 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
   let errorCount = 0;
   let resolvedSkillCount = 0;
 
+  const currentOs = detectPlatformOs();
   const manifest = await loadManifest(layout.rootDir);
   findings.push({
     level: "info",
     message: `${layout.scope} manifest loaded (${manifest.skills.length} root skill${manifest.skills.length === 1 ? "" : "s"})`
   });
+  findings.push({
+    level: "info",
+    message: `host platform detected: ${currentOs}`
+  });
+
+  const enabledTargets = (manifest.targets ?? [{ type: "openclaw" as const }]).filter((target) => target.enabled !== false);
+  findings.push({
+    level: "info",
+    message: `${enabledTargets.length} sync target${enabledTargets.length === 1 ? "" : "s"} enabled`
+  });
+  for (const target of enabledTargets) {
+    const result = await collectTargetCompatibilityFindings(layout, target);
+    warningCount += result.warningCount;
+    errorCount += result.errorCount;
+    findings.push(...result.findings);
+  }
 
   const lockfile = await loadLockfile(layout.rootDir);
   if (!lockfile) {
@@ -154,17 +181,14 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
       }
 
       const osSupport = metadata?.compatibility?.os;
-      if (Array.isArray(osSupport) && osSupport.length > 0) {
-        const currentOs = detectPlatformOs();
-        if (!osSupport.includes(currentOs)) {
-          warningCount += 1;
-          findings.push({
-            level: "warning",
-            message: `${skillId} does not list ${currentOs} in compatibility.os`,
-            skillId,
-            path: installDir
-          });
-        }
+      if (Array.isArray(osSupport) && osSupport.length > 0 && !osSupport.includes(currentOs)) {
+        warningCount += 1;
+        findings.push({
+          level: "warning",
+          message: `${skillId} does not list ${currentOs} in compatibility.os`,
+          skillId,
+          path: installDir
+        });
       }
     }
   }
@@ -180,6 +204,61 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
     result: errorCount > 0 ? "failed" : warningCount > 0 ? "warnings" : "healthy",
     findings
   };
+}
+
+async function collectTargetCompatibilityFindings(
+  layout: ScopeLayout,
+  target: ManifestTarget
+): Promise<{ findings: DoctorFinding[]; warningCount: number; errorCount: number }> {
+  const findings: DoctorFinding[] = [];
+  let warningCount = 0;
+  let errorCount = 0;
+
+  const resolvedPath = target.path ? resolveFileUrlOrPath(layout.rootDir, target.path) : resolveDefaultTargetPath(target.type);
+  if (!resolvedPath) {
+    warningCount += 1;
+    findings.push({
+      level: "warning",
+      message: `target ${target.type} requires an explicit path before sync can run`
+    });
+    return { findings, warningCount, errorCount };
+  }
+
+  const containmentRoot = target.path ? layout.rootDir : path.dirname(resolvedPath);
+  try {
+    await resolveCleanupRoot(resolvedPath, {
+      containmentRoot,
+      label: `target ${target.type} path ${resolvedPath}`
+    });
+  } catch (error) {
+    errorCount += 1;
+    findings.push({
+      level: "error",
+      message: error instanceof Error ? error.message : String(error),
+      path: resolvedPath
+    });
+    return { findings, warningCount, errorCount };
+  }
+
+  if (target.type === "codex" && !(await commandExists("codex"))) {
+    warningCount += 1;
+    findings.push({
+      level: "warning",
+      message: `codex target is enabled but the codex binary was not found in PATH on this host`,
+      path: resolvedPath
+    });
+  }
+
+  if (target.type === "claude_code" && !(await commandExists("claude"))) {
+    warningCount += 1;
+    findings.push({
+      level: "warning",
+      message: `claude_code target is enabled but the claude binary was not found in PATH on this host`,
+      path: resolvedPath
+    });
+  }
+
+  return { findings, warningCount, errorCount };
 }
 
 async function commandExists(binary: string): Promise<boolean> {

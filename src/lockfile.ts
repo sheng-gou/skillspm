@@ -36,6 +36,9 @@ function validateLockfile(lockfile: unknown): SkillsLock {
   if (!value.resolved || typeof value.resolved !== "object" || Array.isArray(value.resolved)) {
     errors.push("resolved must be an object");
   }
+  if (value.targets !== undefined && (typeof value.targets !== "object" || value.targets === null || Array.isArray(value.targets))) {
+    errors.push("targets must be an object");
+  }
   if (typeof value.generated_at !== "string") {
     errors.push("generated_at must be a string");
   }
@@ -61,6 +64,45 @@ function validateLockfile(lockfile: unknown): SkillsLock {
     }
     if (entry.artifact !== undefined && (typeof entry.artifact !== "object" || entry.artifact === null || Array.isArray(entry.artifact))) {
       errors.push(`resolved.${skillId}.artifact must be an object`);
+    }
+  }
+
+  for (const [targetName, target] of Object.entries(value.targets ?? {})) {
+    if (!target || typeof target !== "object" || Array.isArray(target)) {
+      errors.push(`targets.${targetName} must be an object`);
+      continue;
+    }
+
+    const normalizedEntryCount = typeof target.entry_count === "string" && /^\d+$/.test(target.entry_count)
+      ? Number(target.entry_count)
+      : target.entry_count;
+    if (normalizedEntryCount !== undefined) {
+      target.entry_count = normalizedEntryCount;
+    }
+
+    if (target.type !== "openclaw" && target.type !== "codex" && target.type !== "claude_code" && target.type !== "generic") {
+      errors.push(`targets.${targetName}.type has unsupported value`);
+    }
+    if (typeof target.path !== "string") {
+      errors.push(`targets.${targetName}.path must be a string`);
+    }
+    if (target.configured_path !== undefined && typeof target.configured_path !== "string") {
+      errors.push(`targets.${targetName}.configured_path must be a string`);
+    }
+    if (typeof target.enabled !== "boolean") {
+      errors.push(`targets.${targetName}.enabled must be a boolean`);
+    }
+    if (target.mode !== "copy" && target.mode !== "symlink") {
+      errors.push(`targets.${targetName}.mode must be copy or symlink`);
+    }
+    if (target.status !== "synced") {
+      errors.push(`targets.${targetName}.status must be synced`);
+    }
+    if (typeof target.last_synced_at !== "string") {
+      errors.push(`targets.${targetName}.last_synced_at must be a string`);
+    }
+    if (normalizedEntryCount !== undefined && (typeof normalizedEntryCount !== "number" || !Number.isInteger(normalizedEntryCount) || normalizedEntryCount < 0)) {
+      errors.push(`targets.${targetName}.entry_count must be a non-negative integer`);
     }
   }
 

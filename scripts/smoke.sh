@@ -194,12 +194,17 @@ test "${LOCK_EXIT}" -eq 2
 grep -q "skills.lock is invalid" /tmp/skills-bad-lock.log
 
 IMPORT_DIR="${TMP_DIR}/import-workspace"
-mkdir -p "${IMPORT_DIR}" "${HOME}/.openclaw/skills"
+mkdir -p "${IMPORT_DIR}" "${HOME}/.openclaw/skills" "${HOME}/.codex/skills" "${HOME}/.claude/skills"
 cd "${IMPORT_DIR}"
 
 ${CLI} init >/tmp/skills-import-init.log
 
-mkdir -p local-skills/existing local-skills/from-cwd "${HOME}/.openclaw/skills/hosted-openclaw"
+mkdir -p \
+  local-skills/existing \
+  local-skills/from-cwd \
+  "${HOME}/.openclaw/skills/hosted-openclaw" \
+  "${HOME}/.codex/skills/hosted-codex" \
+  "${HOME}/.claude/skills/hosted-claude"
 
 cat > local-skills/existing/SKILL.md <<'EOF'
 # existing
@@ -243,6 +248,34 @@ package:
   entry: ./
 EOF
 
+cat > "${HOME}/.codex/skills/hosted-codex/SKILL.md" <<'EOF'
+# codex
+EOF
+
+cat > "${HOME}/.codex/skills/hosted-codex/skill.yaml" <<'EOF'
+schema: skill/v1
+id: host/codex
+name: Imported From Codex
+version: 2.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > "${HOME}/.claude/skills/hosted-claude/SKILL.md" <<'EOF'
+# claude
+EOF
+
+cat > "${HOME}/.claude/skills/hosted-claude/skill.yaml" <<'EOF'
+schema: skill/v1
+id: host/claude-code
+name: Imported From Claude Code
+version: 3.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
 ${CLI} add ./local-skills/existing >/tmp/skills-import-add.log
 ${CLI} import >/tmp/skills-import.log
 
@@ -252,6 +285,16 @@ grep -q "local/from-cwd" skills.yaml
 grep -q "host/openclaw" skills.yaml
 grep -q "path: ./local-skills/from-cwd" skills.yaml
 grep -q "path: .skills/imported/host__openclaw" skills.yaml
+
+${CLI} import --from codex >/tmp/skills-import-codex.log
+grep -q "Imported 1 skill" /tmp/skills-import-codex.log
+grep -q "host/codex" skills.yaml
+grep -q "path: .skills/imported/host__codex" skills.yaml
+
+${CLI} import --from claude_code >/tmp/skills-import-claude.log
+grep -q "Imported 1 skill" /tmp/skills-import-claude.log
+grep -q "host/claude-code" skills.yaml
+grep -q "path: .skills/imported/host__claude-code" skills.yaml
 
 ${CLI} install >/tmp/skills-import-install.log
 ${CLI} sync >/tmp/skills-sync-openclaw.log
@@ -1109,6 +1152,332 @@ ${CLI} target add codex >/tmp/skills-target-add.log
 grep -q "type: codex" skills.yaml
 ${CLI} target add codex >/tmp/skills-target-add-noop.log
 grep -q "already exists" /tmp/skills-target-add-noop.log
+${CLI} target add generic --path ./generic-target >/tmp/skills-target-add-generic.log
+grep -q "type: generic" skills.yaml
+grep -q "path: ./generic-target" skills.yaml
+${CLI} target --help >/tmp/skills-target-help.log
+grep -q "generic" /tmp/skills-target-help.log
+grep -q -- "--path <path>" /tmp/skills-target-help.log
+${CLI} update --help >/tmp/skills-update-help.log
+grep -q "Usage: skills update" /tmp/skills-update-help.log
+grep -q -- "--to <version>" /tmp/skills-update-help.log
+
+UPDATE_DIR="${TMP_DIR}/update-workspace"
+mkdir -p "${UPDATE_DIR}/registry/update-check" "${UPDATE_DIR}/registry/stable-root"
+cd "${UPDATE_DIR}"
+
+${CLI} init >/tmp/skills-update-init.log
+
+cat > registry/update-check/SKILL.md <<'EOF'
+# update check
+EOF
+
+cat > registry/update-check/skill.yaml <<'EOF'
+schema: skill/v1
+id: acme/update-check
+name: Update Check
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > registry/stable-root/SKILL.md <<'EOF'
+# stable root
+EOF
+
+cat > registry/stable-root/skill.yaml <<'EOF'
+schema: skill/v1
+id: acme/stable-root
+name: Stable Root
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > index.yaml <<'EOF'
+schema: skills-index/v1
+skills:
+  - id: acme/update-check
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/update-check
+  - id: acme/stable-root
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/stable-root
+EOF
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: update-workspace
+sources:
+  - name: local
+    type: index
+    url: ./index.yaml
+skills:
+  - id: acme/update-check
+    version: ^1.0.0
+    source: local
+  - id: acme/stable-root
+    version: ^1.0.0
+    source: local
+targets:
+  - type: generic
+    path: ./synced-target
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-update-install.log
+grep -q "acme/update-check:" skills.lock
+grep -A3 "acme/update-check:" skills.lock | grep -q "version: 1.0.0"
+grep -q "acme/stable-root:" skills.lock
+grep -A3 "acme/stable-root:" skills.lock | grep -q "version: 1.0.0"
+
+cat > registry/update-check/skill.yaml <<'EOF'
+schema: skill/v1
+id: acme/update-check
+name: Update Check
+version: 1.1.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > registry/stable-root/skill.yaml <<'EOF'
+schema: skill/v1
+id: acme/stable-root
+name: Stable Root
+version: 1.1.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > index.yaml <<'EOF'
+schema: skills-index/v1
+skills:
+  - id: acme/update-check
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/update-check
+      1.1.0:
+        artifact:
+          type: path
+          url: ./registry/update-check
+  - id: acme/stable-root
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/stable-root
+      1.1.0:
+        artifact:
+          type: path
+          url: ./registry/stable-root
+EOF
+
+${CLI} update acme/update-check >/tmp/skills-update-targeted.log
+grep -q "Updated acme/update-check 1.0.0 -> 1.1.0" /tmp/skills-update-targeted.log
+! grep -q "acme/stable-root 1.0.0 -> 1.1.0" /tmp/skills-update-targeted.log
+grep -A3 "acme/update-check:" skills.lock | grep -q "version: 1.1.0"
+grep -A3 "acme/stable-root:" skills.lock | grep -q "version: 1.0.0"
+
+cp skills.yaml skills.before.failed-update.yaml
+set +e
+${CLI} update acme/update-check --to 9.9.9 >/tmp/skills-update-bad-pin.log 2>&1
+UPDATE_BAD_PIN_EXIT=$?
+set -e
+test "${UPDATE_BAD_PIN_EXIT}" -ne 0
+grep -q "Skill acme/update-check has no index version matching 9.9.9" /tmp/skills-update-bad-pin.log
+cmp -s skills.before.failed-update.yaml skills.yaml
+
+${CLI} update acme/update-check --to 1.0.0 >/tmp/skills-update-pin.log
+grep -q "Pinned acme/update-check to 1.0.0" /tmp/skills-update-pin.log
+grep -q "version: 1.0.0" skills.yaml
+grep -A3 "acme/update-check:" skills.lock | grep -q "version: 1.0.0"
+grep -A3 "acme/stable-root:" skills.lock | grep -q "version: 1.0.0"
+
+UPDATE_GIT_DIR="${TMP_DIR}/update-git-workspace"
+mkdir -p "${UPDATE_GIT_DIR}"
+cd "${UPDATE_GIT_DIR}"
+
+${CLI} init >/tmp/skills-update-git-init.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: update-git
+sources:
+  - name: upstream
+    type: git
+    url: https://example.com/acme/skills.git
+skills:
+  - id: acme/git-root
+    version: ^1.0.0
+    source: upstream
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+cp skills.yaml skills.before.yaml
+set +e
+${CLI} update acme/git-root --to 1.2.3 >/tmp/skills-update-git-pin.log 2>&1
+UPDATE_GIT_EXIT=$?
+set -e
+test "${UPDATE_GIT_EXIT}" -eq 2
+grep -q -- "--to is only supported for index-backed root skills" /tmp/skills-update-git-pin.log
+! grep -q "git source install is not implemented yet" /tmp/skills-update-git-pin.log
+grep -q "version: \^1.0.0" skills.yaml
+cmp -s skills.before.yaml skills.yaml
+
+cd "${UPDATE_DIR}"
+${CLI} sync generic >/tmp/skills-update-sync.log
+grep -q "status: synced" skills.lock
+grep -q "last_synced_at:" skills.lock
+grep -q "entry_count: 2" skills.lock
+${CLI} snapshot --json >/tmp/skills-update-snapshot.json
+grep -q '"status": "synced"' /tmp/skills-update-snapshot.json
+grep -q '"entry_count": 2' /tmp/skills-update-snapshot.json
+
+SNAPSHOT_PATH_DIR="${TMP_DIR}/snapshot-path-workspace"
+mkdir -p "${SNAPSHOT_PATH_DIR}/local-skills/path-check"
+cd "${SNAPSHOT_PATH_DIR}"
+
+${CLI} init >/tmp/skills-snapshot-path-init.log
+
+cat > local-skills/path-check/SKILL.md <<'EOF'
+# path check
+EOF
+
+cat > local-skills/path-check/skill.yaml <<'EOF'
+schema: skill/v1
+id: local/path-check
+name: Path Check
+version: 0.40.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: snapshot-path-check
+skills:
+  - id: local/path-check
+    path: ./local-skills/path-check
+targets:
+  - type: generic
+    path: ./target-a
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-snapshot-path-install.log
+${CLI} sync >/tmp/skills-snapshot-path-sync.log
+
+test -d "${SNAPSHOT_PATH_DIR}/target-a/local__path-check@0.40.0"
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: snapshot-path-check
+skills:
+  - id: local/path-check
+    path: ./local-skills/path-check
+targets:
+  - type: generic
+    path: ./target-b
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} freeze >/tmp/skills-snapshot-path-freeze.log
+${CLI} snapshot --json >/tmp/skills-snapshot-path.json
+
+SNAPSHOT_PATH_A="${SNAPSHOT_PATH_DIR}/target-a" SNAPSHOT_PATH_B="${SNAPSHOT_PATH_DIR}/target-b" node --input-type=module <<'EOF'
+import { readFileSync } from 'node:fs';
+
+const snapshot = JSON.parse(readFileSync('/tmp/skills-snapshot-path.json', 'utf8'));
+const genericTarget = snapshot.targets.find((target) => target.type === 'generic');
+if (!genericTarget) {
+  throw new Error('expected generic target record');
+}
+if (genericTarget.path !== process.env.SNAPSHOT_PATH_B) {
+  throw new Error(`expected current path ${process.env.SNAPSHOT_PATH_B}, received ${genericTarget.path}`);
+}
+if (genericTarget.last_synced_path !== process.env.SNAPSHOT_PATH_A) {
+  throw new Error(`expected last_synced_path ${process.env.SNAPSHOT_PATH_A}, received ${genericTarget.last_synced_path}`);
+}
+if (genericTarget.status !== 'synced') {
+  throw new Error(`expected synced status, received ${genericTarget.status}`);
+}
+if (genericTarget.entry_count !== 1) {
+  throw new Error(`expected entry_count 1, received ${genericTarget.entry_count}`);
+}
+EOF
+
+grep -q 'path: .*target-a' skills.lock
+
+grep -q '"last_synced_path": "' /tmp/skills-snapshot-path.json
+
+DOCTOR_TARGET_DIR="${TMP_DIR}/doctor-target-workspace"
+mkdir -p "${DOCTOR_TARGET_DIR}/local-skills/doctor-target"
+cd "${DOCTOR_TARGET_DIR}"
+
+${CLI} init >/tmp/skills-doctor-target-init.log
+
+cat > local-skills/doctor-target/SKILL.md <<'EOF'
+# doctor target
+EOF
+
+cat > local-skills/doctor-target/skill.yaml <<'EOF'
+schema: skill/v1
+id: local/doctor-target
+name: Doctor Target
+version: 0.30.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: doctor-target
+skills:
+  - id: local/doctor-target
+    path: ./local-skills/doctor-target
+targets:
+  - type: generic
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-doctor-target-install.log
+${CLI} doctor --json >/tmp/skills-doctor-target.json
+grep -q '"result": "warnings"' /tmp/skills-doctor-target.json
+grep -q 'target generic requires an explicit path before sync can run' /tmp/skills-doctor-target.json
 
 REMOVE_DIR="${TMP_DIR}/remove-workspace"
 mkdir -p "${REMOVE_DIR}/local-skills/keep-skill" "${REMOVE_DIR}/local-skills/drop-skill"

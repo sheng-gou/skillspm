@@ -7,6 +7,7 @@ import { loadSkillMetadata, validateSkillMetadata } from "./skill";
 import type {
   ManifestSkill,
   ManifestSource,
+  SkillsManifest,
   ResolutionResult,
   ResolvedSkillNode,
   SkillDependency
@@ -28,8 +29,12 @@ interface ResolveContext {
   sourceLookup: Map<string, ManifestSource>;
 }
 
-export async function resolveProject(cwd: string): Promise<ResolutionResult> {
-  const manifest = await loadManifest(cwd);
+export interface ResolveProjectOptions {
+  manifest?: SkillsManifest;
+}
+
+export async function resolveProject(cwd: string, options: ResolveProjectOptions = {}): Promise<ResolutionResult> {
+  const manifest = options.manifest ?? await loadManifest(cwd);
   const rootLookup = new Map<string, ManifestSkill>(manifest.skills.map((skill) => [skill.id, skill]));
   const sourceLookup = new Map<string, ManifestSource>((manifest.sources ?? []).map((source) => [source.name, source]));
   const context: ResolveContext = {

@@ -1,9 +1,11 @@
 import { Command } from "commander";
+import semver from "semver";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
 import { syncTargets } from "./adapter";
+import { loadLockfile } from "./lockfile";
 import { runDoctor } from "./doctor";
 import { CliError } from "./errors";
 import { buildInspectReport, renderInspectText } from "./inspect-report";
@@ -15,7 +17,7 @@ import { resolveProject } from "./resolver";
 import { formatScopeLabel, resolveScopeLayout, resolveStateContainmentRoot } from "./scope";
 import type { ScopeLayout } from "./scope";
 import { loadSkillMetadata, validateSkillMetadata } from "./skill";
-import type { ManifestTarget, SkillMetadata, SkillsManifest, TargetType } from "./types";
+import type { ManifestSource, ManifestTarget, SkillMetadata, SkillsLock, SkillsManifest, TargetType } from "./types";
 import {
   MANIFEST_FILE,
   assertConfiguredPathWithinRootReal,
@@ -116,6 +118,24 @@ export async function runCli(argv: string[]): Promise<number> {
   ).action(async (options: { global?: boolean }) => {
     await runInstallCommand(resolveScopeLayout(process.cwd(), options.global));
   });
+
+  withScopeOption(
+    program
+      .command("update")
+      .description("Refresh installed skills from the current manifest")
+      .argument("[skill]", "Optional root skill id or local path")
+      .option("--to <version>", "Pin the selected index-backed root skill to an exact version")
+  ).action(
+    async (
+      skillOrOptions: string | { to?: string; global?: boolean } | undefined,
+      options?: { to?: string; global?: boolean }
+    ) => {
+      const input = typeof skillOrOptions === "string" ? skillOrOptions : undefined;
+      const normalizedOptions = typeof skillOrOptions === "string" ? options ?? {} : skillOrOptions ?? {};
+      const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
+      await runUpdateCommand(process.cwd(), layout, input, normalizedOptions);
+    }
+  );
 
   withScopeOption(
     program
@@ -252,25 +272,31 @@ export async function runCli(argv: string[]): Promise<number> {
       .command("target")
       .description("Manage sync targets")
       .argument("<action>", "Action to run. Supported: add")
-      .argument("[target]", "Target type: openclaw, codex, or claude_code")
-  ).action(async (action: string, input: string | undefined, options: { global?: boolean }) => {
+      .argument("[target]", "Target type: openclaw, codex, claude_code, or generic")
+      .option("--path <path>", "Set an explicit target path")
+  ).action(async (action: string, input: string | undefined, options: { global?: boolean; path?: string }) => {
     if (action !== "add") {
       throw new CliError(`Unknown target action ${action}. Supported: add.`, 2);
     }
     if (!input) {
-      throw new CliError("Missing target. Use openclaw, codex, or claude_code.", 2);
+      throw new CliError("Missing target. Use openclaw, codex, claude_code, or generic.", 2);
     }
 
     const layout = resolveScopeLayout(process.cwd(), options.global);
     const manifest = await loadManifest(layout.rootDir);
-    const targetType = parseBuiltInTargetType(input);
-    const { nextManifest, changed } = addTargetToManifest(manifest, targetType);
+    const targetType = parseTargetType(input);
+    const targetPath = options.path ? await normalizeTargetPath(process.cwd(), layout, options.path) : undefined;
+    if (targetType === "generic" && !targetPath) {
+      throw new CliError("Target generic requires --path.", 2);
+    }
+
+    const { nextManifest, changed, updated } = addTargetToManifest(manifest, { type: targetType, path: targetPath });
     if (!changed) {
       printInfo(`Target ${targetType} already exists in ${layout.scope} skills.yaml`);
       return;
     }
     await saveManifest(layout.rootDir, nextManifest);
-    printSuccess(`Added target ${targetType} to ${layout.scope} skills.yaml`);
+    printSuccess(`${updated ? "Updated" : "Added"} target ${targetType} in ${layout.scope} skills.yaml`);
   });
 
   program
@@ -385,20 +411,52 @@ async function removeSkillFromManifest(
   };
 }
 
-function addTargetToManifest(manifest: SkillsManifest, targetType: TargetType): { nextManifest: SkillsManifest; changed: boolean } {
+function addTargetToManifest(
+  manifest: SkillsManifest,
+  nextTarget: ManifestTarget
+): { nextManifest: SkillsManifest; changed: boolean; updated: boolean } {
   const targets = [...(manifest.targets ?? [])];
-  if (targets.some((target) => target.type === targetType)) {
-    return { nextManifest: manifest, changed: false };
+  const existingIndex = targets.findIndex((target) => target.type === nextTarget.type);
+  if (existingIndex >= 0) {
+    const existing = targets[existingIndex];
+    const mergedPath = nextTarget.path ?? existing.path;
+    const mergedTarget: ManifestTarget = {
+      ...existing,
+      type: nextTarget.type,
+      ...(mergedPath ? { path: mergedPath } : {})
+    };
+    if (existing.path === mergedTarget.path) {
+      return { nextManifest: manifest, changed: false, updated: false };
+    }
+    targets[existingIndex] = mergedTarget;
+    return {
+      nextManifest: {
+        ...manifest,
+        targets
+      },
+      changed: true,
+      updated: true
+    };
   }
 
-  targets.push({ type: targetType });
+  targets.push({
+    type: nextTarget.type,
+    ...(nextTarget.path ? { path: nextTarget.path } : {})
+  });
   return {
     nextManifest: {
       ...manifest,
       targets
     },
-    changed: true
+    changed: true,
+    updated: false
   };
+}
+
+async function normalizeTargetPath(commandCwd: string, layout: ScopeLayout, input: string): Promise<string> {
+  const absolutePath = resolveFileUrlOrPath(commandCwd, input);
+  await assertConfiguredPathWithinRootReal(layout.rootDir, input, absolutePath, `target path ${input}`);
+  return normalizeRelativePath(layout.rootDir, absolutePath);
 }
 
 async function runInstallCommand(layout: ScopeLayout): Promise<void> {
@@ -406,6 +464,244 @@ async function runInstallCommand(layout: ScopeLayout): Promise<void> {
   if (result.manifest.settings?.auto_sync) {
     await syncTargets(layout, result.manifest);
   }
+}
+
+async function runUpdateCommand(
+  commandCwd: string,
+  layout: ScopeLayout,
+  input: string | undefined,
+  options: { to?: string }
+): Promise<void> {
+  const manifest = await loadManifest(layout.rootDir);
+  const existingLock = await loadLockfile(layout.rootDir);
+  const updatePlan = await prepareManifestForUpdate(commandCwd, layout, manifest, existingLock, input, options.to);
+
+  printInfo("Checking for updates...");
+  const result = await installProject(layout, { manifest: updatePlan.installManifest });
+  if (updatePlan.persistManifest) {
+    await saveManifest(layout.rootDir, updatePlan.persistManifest);
+  }
+  if (result.manifest.settings?.auto_sync) {
+    await syncTargets(layout, result.manifest);
+  }
+
+  if (updatePlan.pinnedVersion && updatePlan.selectedSkill) {
+    printSuccess(`Pinned ${updatePlan.selectedSkill.id} to ${updatePlan.pinnedVersion} in ${layout.scope} skills.yaml`);
+  }
+
+  const changes = diffLockfiles(existingLock, result.lockfile);
+  if (changes.length === 0) {
+    printInfo(
+      updatePlan.selectedSkill
+        ? `No updates for ${updatePlan.selectedSkill.id} under current manifest constraints`
+        : "No updates available under current manifest constraints"
+    );
+    return;
+  }
+
+  for (const change of changes) {
+    printSuccess(renderLockDiff(change));
+  }
+}
+
+async function prepareManifestForUpdate(
+  commandCwd: string,
+  layout: ScopeLayout,
+  manifest: SkillsManifest,
+  existingLock: SkillsLock | undefined,
+  input: string | undefined,
+  versionOverride?: string
+): Promise<{
+  installManifest: SkillsManifest;
+  persistManifest?: SkillsManifest;
+  selectedSkill?: SkillsManifest["skills"][number];
+  pinnedVersion?: string;
+}> {
+  if (!input) {
+    if (versionOverride) {
+      throw new CliError("--to requires a root skill id or local path.", 2);
+    }
+    return { installManifest: manifest };
+  }
+
+  const selectedIndex = await findManifestSkillIndex(commandCwd, layout, manifest, input);
+  if (selectedIndex < 0) {
+    throw new CliError(`Root skill not found: ${input}`, 1);
+  }
+
+  const selectedSkill = manifest.skills[selectedIndex];
+  if (!versionOverride) {
+    return {
+      installManifest: buildTargetedUpdateManifest(manifest, existingLock, selectedIndex),
+      selectedSkill
+    };
+  }
+
+  if (selectedSkill.path) {
+    throw new CliError("--to is only supported for index-backed root skills.", 2);
+  }
+  const selectedSource = resolveManifestSourceForPin(manifest, selectedSkill);
+  if (selectedSource?.type !== "index") {
+    throw new CliError("--to is only supported for index-backed root skills.", 2);
+  }
+  if (semver.valid(versionOverride) !== versionOverride) {
+    throw new CliError(`--to requires an exact semver version. Received: ${versionOverride}`, 2);
+  }
+
+  const nextSkills = [...manifest.skills];
+  nextSkills[selectedIndex] = {
+    ...selectedSkill,
+    version: versionOverride
+  };
+  const persistManifest: SkillsManifest = {
+    ...manifest,
+    skills: nextSkills
+  };
+  const installManifest = buildTargetedUpdateManifest(persistManifest, existingLock, selectedIndex);
+
+  return {
+    installManifest,
+    persistManifest,
+    selectedSkill: nextSkills[selectedIndex],
+    pinnedVersion: versionOverride
+  };
+}
+
+function buildTargetedUpdateManifest(
+  manifest: SkillsManifest,
+  existingLock: SkillsLock | undefined,
+  selectedIndex: number
+): SkillsManifest {
+  const nextSkills = manifest.skills.map((skill, index) => {
+    if (index === selectedIndex || skill.path) {
+      return skill;
+    }
+
+    const lockedVersion = existingLock?.resolved[skill.id]?.version;
+    if (!canPreserveLockedRootVersion(skill.version, lockedVersion)) {
+      return skill;
+    }
+
+    return {
+      ...skill,
+      version: lockedVersion
+    };
+  });
+
+  const changed = nextSkills.some((skill, index) => skill !== manifest.skills[index]);
+  if (!changed) {
+    return manifest;
+  }
+
+  return {
+    ...manifest,
+    skills: nextSkills
+  };
+}
+
+function canPreserveLockedRootVersion(requestedRange: string | undefined, lockedVersion: string | undefined): lockedVersion is string {
+  if (!lockedVersion || semver.valid(lockedVersion) !== lockedVersion) {
+    return false;
+  }
+  if (!requestedRange) {
+    return true;
+  }
+  return semver.satisfies(lockedVersion, requestedRange);
+}
+
+function resolveManifestSourceForPin(manifest: SkillsManifest, skill: SkillsManifest["skills"][number]): ManifestSource | undefined {
+  if (skill.path) {
+    return undefined;
+  }
+  if (skill.source) {
+    return manifest.sources?.find((source) => source.name === skill.source);
+  }
+  const indexSources = (manifest.sources ?? []).filter((source) => source.type === "index");
+  return indexSources.length === 1 ? indexSources[0] : undefined;
+}
+
+function buildTargetedInstallManifest(
+  manifest: SkillsManifest,
+  existingLock: SkillsLock | undefined,
+  selectedIndex: number
+): SkillsManifest {
+  if (!existingLock) {
+    return manifest;
+  }
+
+  let changed = false;
+  const nextSkills = manifest.skills.map((skill, index) => {
+    if (index === selectedIndex || skill.path) {
+      return skill;
+    }
+
+    const lockedVersion = existingLock.resolved[skill.id]?.version;
+    if (!lockedVersion || lockedVersion === "unversioned") {
+      return skill;
+    }
+    if (skill.version && semver.satisfies(lockedVersion, skill.version) === false) {
+      return skill;
+    }
+    if (skill.version === lockedVersion) {
+      return skill;
+    }
+
+    changed = true;
+    return {
+      ...skill,
+      version: lockedVersion
+    };
+  });
+
+  return changed ? { ...manifest, skills: nextSkills } : manifest;
+}
+
+
+async function findManifestSkillIndex(
+  commandCwd: string,
+  layout: ScopeLayout,
+  manifest: SkillsManifest,
+  input: string
+): Promise<number> {
+  if (looksLikePath(input)) {
+    const absolutePath = resolveFileUrlOrPath(commandCwd, input);
+    return manifest.skills.findIndex((skill) => skill.path && path.resolve(layout.rootDir, skill.path) === path.resolve(absolutePath));
+  }
+
+  const parsed = parseSkillSpecifier(input);
+  return manifest.skills.findIndex((skill) => skill.id === parsed.id);
+}
+
+interface LockDiffRecord {
+  id: string;
+  before: string | null;
+  after: string | null;
+}
+
+function diffLockfiles(before: Awaited<ReturnType<typeof loadLockfile>>, after: Awaited<ReturnType<typeof loadLockfile>>): LockDiffRecord[] {
+  const previousResolved = before?.resolved ?? {};
+  const nextResolved = after?.resolved ?? {};
+  const ids = new Set([...Object.keys(previousResolved), ...Object.keys(nextResolved)]);
+  return [...ids]
+    .sort((left, right) => left.localeCompare(right))
+    .flatMap((id) => {
+      const previousVersion = previousResolved[id]?.version ?? null;
+      const nextVersion = nextResolved[id]?.version ?? null;
+      if (previousVersion === nextVersion) {
+        return [];
+      }
+      return [{ id, before: previousVersion, after: nextVersion }];
+    });
+}
+
+function renderLockDiff(change: LockDiffRecord): string {
+  if (change.before === null) {
+    return `Added ${change.id}@${change.after}`;
+  }
+  if (change.after === null) {
+    return `Removed ${change.id}@${change.before}`;
+  }
+  return `Updated ${change.id} ${change.before} -> ${change.after}`;
 }
 
 async function inspectSkill(commandCwd: string, input: string, options: { write?: boolean; setVersion?: string; json?: boolean }): Promise<void> {
@@ -544,6 +840,17 @@ function renderHelp(commandName?: string): string {
       "  -g, --global      Use ~/.skills instead of the current project"
     ].join("\n");
   }
+  if (commandName === "update") {
+    return [
+      "Usage: skills update [skill] [options]",
+      "",
+      "Refresh installed skills from the current manifest",
+      "",
+      "Options:",
+      "  --to <version>    Pin the selected index-backed root skill to an exact version",
+      "  -g, --global      Use ~/.skills instead of the current project"
+    ].join("\n");
+  }
   if (commandName === "bootstrap") {
     return [
       "Usage: skills bootstrap [options]",
@@ -638,9 +945,10 @@ function renderHelp(commandName?: string): string {
       "Manage sync targets",
       "",
       "Commands:",
-      "  add <target>      Add openclaw, codex, or claude_code to skills.yaml",
+      "  add <target>      Add openclaw, codex, claude_code, or generic to skills.yaml",
       "",
       "Options:",
+      "  --path <path>     Set an explicit target path (required for generic)",
       "  -g, --global      Use ~/.skills instead of the current project"
     ].join("\n");
   }
@@ -669,6 +977,7 @@ function renderHelp(commandName?: string): string {
     "  add               Add a root skill to skills.yaml",
     "  remove            Remove a root skill from skills.yaml",
     "  install           Resolve and install skills into the selected scope",
+    "  update            Refresh installed skills from the current manifest",
     "  bootstrap         Install, optionally auto-sync, then run doctor",
     "  freeze            Rewrite skills.lock from the installed state",
     "  import            Discover existing skills and merge them into skills.yaml",
@@ -702,11 +1011,11 @@ function parseSkillSpecifier(input: string): { id: string; version?: string } {
   return { id: input };
 }
 
-function parseBuiltInTargetType(value: string): TargetType {
-  if (value === "openclaw" || value === "codex" || value === "claude_code") {
+function parseTargetType(value: string): TargetType {
+  if (value === "openclaw" || value === "codex" || value === "claude_code" || value === "generic") {
     return value;
   }
-  throw new CliError(`Unknown target ${value}. Use openclaw, codex, or claude_code.`, 2);
+  throw new CliError(`Unknown target ${value}. Use openclaw, codex, claude_code, or generic.`, 2);
 }
 
 function looksLikePath(value: string): boolean {

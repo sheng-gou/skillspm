@@ -1,5 +1,5 @@
 import path from "node:path";
-import { writeLockfile } from "./lockfile";
+import { loadLockfile, writeLockfile } from "./lockfile";
 import { resolveProject } from "./resolver";
 import { resolveStateContainmentRoot } from "./scope";
 import type { ScopeLayout } from "./scope";
@@ -19,9 +19,13 @@ export interface InstallProjectResult {
   manifest: SkillsManifest;
 }
 
-export async function installProject(layout: ScopeLayout): Promise<InstallProjectResult> {
+export interface InstallProjectOptions {
+  manifest?: SkillsManifest;
+}
+
+export async function installProject(layout: ScopeLayout, options: InstallProjectOptions = {}): Promise<InstallProjectResult> {
   printInfo("Resolving dependencies...");
-  const resolution = await resolveProject(layout.rootDir);
+  const resolution = await resolveProject(layout.rootDir, { manifest: options.manifest });
   printSuccess(`Resolved ${resolution.nodes.size} skill${resolution.nodes.size === 1 ? "" : "s"}`);
 
   await resolveCleanupRoot(layout.installedRoot, {
@@ -53,10 +57,12 @@ export async function installProject(layout: ScopeLayout): Promise<InstallProjec
     return accumulator;
   }, {});
 
+  const existingLock = await loadLockfile(layout.rootDir);
   const lockfile: SkillsLock = {
     schema: "skills-lock/v1",
     project: resolution.manifest.project,
     resolved: resolvedEntries,
+    ...(existingLock?.targets ? { targets: existingLock.targets } : {}),
     generated_at: new Date().toISOString()
   };
 

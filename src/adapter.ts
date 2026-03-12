@@ -1,10 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { readdir, rm, symlink } from "node:fs/promises";
+import { loadLockfile, writeLockfile } from "./lockfile";
 import { CliError } from "./errors";
 import { resolveStateContainmentRoot } from "./scope";
 import type { ScopeLayout } from "./scope";
-import type { InstallMode, ManifestTarget, SkillsManifest, TargetType } from "./types";
+import type { InstallMode, LockTargetState, ManifestTarget, SkillsManifest, TargetType } from "./types";
 import { copyDir, ensureDir, exists, printInfo, printSuccess, removeStaleRootEntries, resolveCleanupRoot } from "./utils";
 
 export interface SyncOptions {
@@ -65,6 +66,7 @@ export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest,
   }
 
   const mode = resolveInstallMode(options.mode, manifest.settings?.install_mode);
+  let currentLock = await loadLockfile(layout.rootDir);
   printInfo("Syncing targets...");
 
   for (const target of targets) {
@@ -88,6 +90,27 @@ export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest,
     }
     await removeStaleRootEntries(target.path, installedEntries, cleanupOptions);
     printSuccess(`${target.type} synced (${mode})`);
+
+    if (currentLock) {
+      const targetState: LockTargetState = {
+        type: target.type,
+        path: target.path,
+        ...(target.configuredPath ? { configured_path: target.configuredPath } : {}),
+        enabled: true,
+        mode,
+        status: "synced",
+        last_synced_at: new Date().toISOString(),
+        entry_count: installedEntries.length
+      };
+      currentLock = {
+        ...currentLock,
+        targets: {
+          ...(currentLock.targets ?? {}),
+          [target.type]: targetState
+        }
+      };
+      await writeLockfile(layout.rootDir, currentLock);
+    }
   }
 }
 

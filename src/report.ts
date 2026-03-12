@@ -36,8 +36,13 @@ export interface ListReport {
 export interface SnapshotTargetRecord {
   type: string;
   path: string | null;
+  last_synced_path: string | null;
   enabled: boolean;
   configured: boolean;
+  mode: string | null;
+  status: string | null;
+  last_synced_at: string | null;
+  entry_count: number | null;
 }
 
 export interface SnapshotReport {
@@ -79,6 +84,7 @@ export async function buildListReport(layout: ScopeLayout, options: { resolved?:
 
 export async function buildSnapshotReport(layout: ScopeLayout, options: { resolved?: boolean } = {}): Promise<SnapshotReport> {
   const manifest = await loadManifest(layout.rootDir);
+  const lockfile = await loadLockfile(layout.rootDir);
   const generatedAt = new Date().toISOString();
   const rootSkills = await buildRootSkillRecords(layout, manifest);
   const { skills: resolvedSkills, source } = await buildResolvedSkillRecords(layout, manifest, { preferLive: options.resolved });
@@ -92,7 +98,7 @@ export async function buildSnapshotReport(layout: ScopeLayout, options: { resolv
     resolution_source: source,
     root_skills: rootSkills,
     resolved_skills: resolvedSkills,
-    targets: buildTargetRecords(layout, manifest)
+    targets: buildTargetRecords(layout, manifest, lockfile)
   };
 }
 
@@ -142,6 +148,7 @@ export async function freezeInstalledState(layout: ScopeLayout): Promise<SkillsL
     schema: "skills-lock/v1",
     project: manifest.project,
     resolved,
+    ...(existingLock?.targets ? { targets: existingLock.targets } : {}),
     generated_at: new Date().toISOString()
   };
   await writeLockfile(layout.rootDir, lockfile);
@@ -175,9 +182,26 @@ export function renderSnapshotText(snapshot: SnapshotReport): string {
   lines.push("", `Targets (${snapshot.targets.length})`);
   for (const target of snapshot.targets) {
     const pathLabel = target.path ?? "(requires explicit path)";
-    const configuredLabel = target.configured ? "configured" : "default";
-    const enabledLabel = target.enabled ? "enabled" : "disabled";
-    lines.push(`- ${target.type}: ${pathLabel} [${configuredLabel}, ${enabledLabel}]`);
+    const details = [
+      target.configured ? "configured" : "default",
+      target.enabled ? "enabled" : "disabled"
+    ];
+    if (target.status) {
+      details.push(`status=${target.status}`);
+    }
+    if (target.mode) {
+      details.push(`mode=${target.mode}`);
+    }
+    if (target.last_synced_path && target.last_synced_path !== target.path) {
+      details.push(`last_synced_path=${target.last_synced_path}`);
+    }
+    if (target.last_synced_at) {
+      details.push(`last_synced_at=${target.last_synced_at}`);
+    }
+    if (target.entry_count !== null) {
+      details.push(`entries=${target.entry_count}`);
+    }
+    lines.push(`- ${target.type}: ${pathLabel} [${details.join(", ")}]`);
   }
 
   return lines.join("\n");
@@ -282,23 +306,41 @@ async function buildResolvedSkillRecordsFromLock(
   return skills;
 }
 
-function buildTargetRecords(layout: ScopeLayout, manifest: SkillsManifest): SnapshotTargetRecord[] {
+function buildTargetRecords(layout: ScopeLayout, manifest: SkillsManifest, lockfile?: SkillsLock): SnapshotTargetRecord[] {
   const targets = manifest.targets ?? [];
+  const targetStates = lockfile?.targets ?? {};
+
   if (targets.length === 0) {
+    const state = targetStates.openclaw;
+    const resolvedPath = resolveDefaultTargetPath("openclaw") ?? null;
     return [{
       type: "openclaw",
-      path: resolveDefaultTargetPath("openclaw") ?? null,
+      path: resolvedPath,
+      last_synced_path: state?.path ?? null,
       enabled: true,
-      configured: false
+      configured: false,
+      mode: state?.mode ?? null,
+      status: state?.status ?? null,
+      last_synced_at: state?.last_synced_at ?? null,
+      entry_count: state?.entry_count ?? null
     }];
   }
 
-  return targets.map((target) => ({
-    type: target.type,
-    path: target.path ? path.resolve(layout.rootDir, target.path) : resolveDefaultTargetPath(target.type) ?? null,
-    enabled: target.enabled !== false,
-    configured: true
-  }));
+  return targets.map((target) => {
+    const state = targetStates[target.type];
+    const resolvedPath = target.path ? path.resolve(layout.rootDir, target.path) : resolveDefaultTargetPath(target.type) ?? null;
+    return {
+      type: target.type,
+      path: resolvedPath,
+      last_synced_path: state?.path ?? null,
+      enabled: target.enabled !== false,
+      configured: true,
+      mode: state?.mode ?? null,
+      status: state?.status ?? null,
+      last_synced_at: state?.last_synced_at ?? null,
+      entry_count: state?.entry_count ?? null
+    };
+  });
 }
 
 async function readManifestSkillVersion(rootDir: string, skill: ManifestSkill): Promise<string | undefined> {

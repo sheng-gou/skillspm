@@ -313,9 +313,10 @@ repo/
 └── imported/
 ```
 
-Recommended precedence:
+Recommended usage:
 
-* project > global
+* use project scope by default
+* use `-g` only when you want to read or modify the global environment explicitly
 
 ### Core files
 
@@ -327,9 +328,10 @@ Recommended precedence:
 | Command                              | Description                                              |
 | ------------------------------------ | -------------------------------------------------------- |
 | `skills install [-g]`                | Resolve and install the skills declared in `skills.yaml` |
+| `skills update [skill] [-g]`         | Refresh root skill versions from configured sources or pin one skill |
 | `skills freeze [-g]`                 | Write the current installation state into `skills.lock`  |
 | `skills sync [target] [-g]`          | Sync installed skills to one or more targets             |
-| `skills import --from <source> [-g]` | Import skills from an agent or local path                |
+| `skills import [--from <source>] [-g]` | Import skills from an agent or local path              |
 | `skills inspect <path> --write`      | Generate or complete `skill.yaml` for a raw skill folder |
 
 ## Other commands
@@ -345,6 +347,8 @@ Recommended precedence:
 | `skills why <skill> [-g]`                | Explain why a skill is installed                             |
 | `skills target add <target> [-g]`        | Add a target agent to the current scope                      |
 | `skills bootstrap [-g]`                  | Shortcut for `install + doctor (+ sync if enabled)`          |
+
+`skills import` scans the current working tree and the default OpenClaw skills directory by default. Use `--from openclaw`, `--from codex`, `--from claude_code`, or `--from <path>` to import from one explicit source.
 
 ## For agents
 

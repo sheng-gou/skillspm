@@ -311,9 +311,10 @@ repo/
 └── imported/
 ```
 
-推荐优先级：
+推荐用法：
 
-* project > global
+* 默认优先使用 project scope
+* 只有在你明确想读写全局环境时才加 `-g`
 
 ### 核心文件
 
@@ -324,11 +325,12 @@ repo/
 
 | 命令                                   | 说明                              |
 | ------------------------------------ | ------------------------------- |
-| `skills install [-g]`                | 按 `skills.yaml` 解析并安装 skills 环境 |
-| `skills freeze [-g]`                 | 将当前安装状态写入 `skills.lock`         |
-| `skills sync [target] [-g]`          | 将已安装的 skills 同步到一个或多个 target    |
-| `skills import --from <source> [-g]` | 从 agent 或本地路径接管现有 skills        |
-| `skills inspect <path> --write`      | 为原始 skill 文件夹生成或补全 `skill.yaml` |
+| `skills install [-g]`                  | 按 `skills.yaml` 解析并安装 skills 环境            |
+| `skills update [skill] [-g]`           | 从已配置 source 刷新 root skill 版本，或单独 pin 某个 skill |
+| `skills freeze [-g]`                   | 将当前安装状态写入 `skills.lock`                    |
+| `skills sync [target] [-g]`            | 将已安装的 skills 同步到一个或多个 target           |
+| `skills import [--from <source>] [-g]` | 从 agent 或本地路径接管现有 skills                   |
+| `skills inspect <path> --write`        | 为原始 skill 文件夹生成或补全 `skill.yaml`          |
 
 ## 其他命令
 
@@ -343,6 +345,8 @@ repo/
 | `skills why <skill> [-g]`                | 解释某个 skill 为什么会被安装                            |
 | `skills target add <target> [-g]`        | 为当前作用域添加一个 target agent                       |
 | `skills bootstrap [-g]`                  | `install + doctor（+ 可选 sync）` 的快捷命令           |
+
+`skills import` 默认会扫描当前工作目录，以及默认的 OpenClaw skills 目录。也可以用 `--from openclaw`、`--from codex`、`--from claude_code` 或 `--from <path>` 指定单一来源。
 
 ## 给 agents 的说明
 
