@@ -45,7 +45,7 @@ Teams still:
 
 ```bash
 skills install
-```
+````
 
 ### Freeze the current environment into `skills.lock`
 
@@ -73,8 +73,8 @@ skills inspect ./my-skill --write
 
 ## Requirements
 
-- Node.js 18+ (recommended)
-- macOS or Linux recommended for the current release
+* Node.js 18+ (recommended)
+* macOS or Linux recommended for the current release
 
 ## Install
 
@@ -124,14 +124,17 @@ skills freeze
 
 It declares:
 
-- which skills belong to this environment
-- where those skills come from
-- which agents or targets should receive them
-- optional install and sync behavior
+* which skills belong to this environment
+* where those skills come from
+* which agents or targets should receive them
+* optional install and sync behavior
 
-`skills install` reads `skills.yaml` and installs the environment.  
-`skills freeze` writes the resolved state into `skills.lock`.  
-`skills sync` pushes the installed environment to one or more agents.
+`skills install` reads `skills.yaml`, resolves skills from the declared sources, and installs them into the local `.skills` workspace.
+
+After that:
+
+* `skills freeze` writes the resolved state into `skills.lock`
+* `skills sync` pushes the installed environment from `.skills` to one or more agents
 
 ### Minimal example
 
@@ -177,13 +180,24 @@ settings:
   auto_sync: true
 ```
 
+### Where `skills install` gets skills from
+
+`skills install` only installs skills from sources declared in `skills.yaml`.
+
+In the current release, the main source types are:
+
+* local paths
+* local YAML source files
+
+This keeps installs explicit and reproducible.
+
 ### Key fields
 
-- `schema`: manifest version
-- `sources`: optional skill sources such as an index
-- `skills`: the root skills in this environment
-- `targets`: where installed skills should be synced
-- `settings`: optional behavior such as `auto_sync`
+* `schema`: manifest version
+* `sources`: optional declared sources
+* `skills`: the root skills in this environment
+* `targets`: where installed skills should be synced
+* `settings`: optional behavior such as `auto_sync`
 
 ### Skill entries
 
@@ -196,7 +210,7 @@ A skill can be declared in two common ways:
   path: ./local-skills/code-review
 ```
 
-#### Indexed skill
+#### Source-based skill
 
 ```yaml
 - id: openai/code-review
@@ -206,8 +220,8 @@ A skill can be declared in two common ways:
 
 In short:
 
-- use `path` for local skills
-- use `id + version + source` for skills resolved from an index
+* use `path` for local skills
+* use `id + version + source` for skills resolved from a declared source file
 
 ## `skills.lock`
 
@@ -223,23 +237,25 @@ then `skills.lock` records:
 
 It is mainly used to lock the resolved skills versions and sources, so the same environment can be reproduced later across machines, repos, and agents.
 
+In most cases, you do not edit `skills.lock` by hand. It is produced by `skills install` / `skills freeze`.
+
 ### What it is for
 
-- locking the resolved skills versions
-- recording where each skill came from
-- making installs reproducible
-- helping humans and agents use the same environment
+* locking the resolved skills versions
+* recording where each skill came from
+* making installs reproducible
+* helping humans and agents use the same environment
 
 ### Typical workflow
 
-- edit `skills.yaml` to describe the desired environment
-- run `skills install` to resolve and install it
-- run `skills freeze` to write the resolved state into `skills.lock`
+* edit `skills.yaml` to describe the desired environment
+* run `skills install` to resolve and install it
+* run `skills freeze` to write the resolved state into `skills.lock`
 
 ### In short
 
-- `skills.yaml` = desired environment
-- `skills.lock` = frozen installed environment
+* `skills.yaml` = desired environment
+* `skills.lock` = frozen installed environment
 
 ## Common workflows
 
@@ -299,37 +315,36 @@ repo/
 
 Recommended precedence:
 
-- project > global
+* project > global
 
 ### Core files
 
-- `skills.yaml`: manifest for the current scope
-- `skills.lock`: frozen installation state
-- `skill.yaml`: per-skill metadata
+* `skills.yaml`: manifest for the current scope
+* `skills.lock`: frozen installation state
 
 ## Core commands reference
 
-| Command | Description |
-|---|---|
-| `skills install [-g]` | Resolve and install the skills declared in `skills.yaml` |
-| `skills freeze [-g]` | Write the current installation state into `skills.lock` |
-| `skills sync [target] [-g]` | Sync installed skills to one or more targets |
-| `skills import --from <source> [-g]` | Import skills from an agent or local path |
-| `skills inspect <path> --write` | Generate or complete `skill.yaml` for a raw skill folder |
+| Command                              | Description                                              |
+| ------------------------------------ | -------------------------------------------------------- |
+| `skills install [-g]`                | Resolve and install the skills declared in `skills.yaml` |
+| `skills freeze [-g]`                 | Write the current installation state into `skills.lock`  |
+| `skills sync [target] [-g]`          | Sync installed skills to one or more targets             |
+| `skills import --from <source> [-g]` | Import skills from an agent or local path                |
+| `skills inspect <path> --write`      | Generate or complete `skill.yaml` for a raw skill folder |
 
 ## Other commands
 
-| Command | Description |
-|---|---|
-| `skills snapshot [--json] [-g]` | Export the current skills environment |
-| `skills doctor [--json] [-g]` | Diagnose environment health |
-| `skills init [-g]` | Create a starter `skills.yaml` for a project or global scope |
-| `skills add <skill> [-g]` | Add a root skill entry to `skills.yaml` |
-| `skills remove <skill> [-g]` | Remove a root skill entry from `skills.yaml` |
-| `skills list [--resolved] [--json] [-g]` | Show skills in the current scope |
-| `skills why <skill> [-g]` | Explain why a skill is installed |
-| `skills target add <target> [-g]` | Add a target agent to the current scope |
-| `skills bootstrap [-g]` | Shortcut for `install + doctor (+ sync if enabled)` |
+| Command                                  | Description                                                  |
+| ---------------------------------------- | ------------------------------------------------------------ |
+| `skills snapshot [--json] [-g]`          | Export the current skills environment                        |
+| `skills doctor [--json] [-g]`            | Diagnose environment health                                  |
+| `skills init [-g]`                       | Create a starter `skills.yaml` for a project or global scope |
+| `skills add <skill> [-g]`                | Add a root skill entry to `skills.yaml`                      |
+| `skills remove <skill> [-g]`             | Remove a root skill entry from `skills.yaml`                 |
+| `skills list [--resolved] [--json] [-g]` | Show skills in the current scope                             |
+| `skills why <skill> [-g]`                | Explain why a skill is installed                             |
+| `skills target add <target> [-g]`        | Add a target agent to the current scope                      |
+| `skills bootstrap [-g]`                  | Shortcut for `install + doctor (+ sync if enabled)`          |
 
 ## For agents
 
@@ -338,6 +353,12 @@ If a repo contains `skills.yaml`, an agent should usually run:
 ```bash
 skills install
 skills doctor --json
+```
+
+If targets are already configured, the agent may also run:
+
+```bash
+skills sync
 ```
 
 If a newly created skill folder lacks metadata:
@@ -352,22 +373,22 @@ Detailed agent-facing instructions should live in `AGENTS.md`.
 
 What works today:
 
-- project scope and global scope
-- manifest + lockfile workflow
-- import from OpenClaw / Codex / Claude Code / local path
-- sync to OpenClaw / Codex / Claude Code / generic target
-- inspect and generate minimal `skill.yaml`
-- snapshot and list with JSON output
-- doctor with JSON output
+* project scope and global scope
+* manifest + lockfile workflow
+* import from OpenClaw / Codex / Claude Code / local path
+* sync to OpenClaw / Codex / Claude Code / generic target
+* inspect and generate minimal `skill.yaml`
+* snapshot and list with JSON output
+* doctor with JSON output
 
 ## Current limitations
 
 Not implemented yet or still limited:
 
-- git source install
-- remote registry / auth / download flows
-- automatic dependency inference for new skills
-- deeper host compatibility rules
+* git source install
+* remote registry / auth / download flows
+* automatic dependency inference for new skills
+* deeper host compatibility rules
 
 ## Development
 
@@ -375,3 +396,4 @@ Not implemented yet or still limited:
 npm install
 npm test
 ```
+
