@@ -238,6 +238,7 @@ settings:
 ### 关键字段
 
 * `schema`：manifest 版本
+* `project`：可选的项目级 metadata，其中 `project.name` 也是可选的
 * `sources`：可选的声明式来源
 * `skills`：这套环境中的根 skills
 * `targets`：安装后要同步到哪里
@@ -280,6 +281,8 @@ settings:
 它最核心的作用，就是锁定这套环境中 Skills 的解析版本和来源，从而让这套环境之后还能被稳定复现，无论是在不同机器、不同仓库，还是不同 Agent 中。
 
 大多数情况下，你不需要手工编辑 `skills.lock`。它通常由 `skillspm install` / `skillspm freeze` 生成。
+
+如果存在，`project.name` 只是从 `skills.yaml` 继承过来的可选项目级 metadata。
 
 ### 它的用途
 

@@ -20,6 +20,11 @@ export function validateManifest(manifest: unknown): SkillsManifest {
   if (value.schema !== "skills/v1") {
     errors.push("schema must be skills/v1");
   }
+  if (value.project !== undefined && (typeof value.project !== "object" || value.project === null || Array.isArray(value.project))) {
+    errors.push("project must be an object");
+  } else if (value.project?.name !== undefined && typeof value.project.name !== "string") {
+    errors.push("project.name must be a string");
+  }
   if (!Array.isArray(value.skills)) {
     errors.push("skills must be an array");
   }

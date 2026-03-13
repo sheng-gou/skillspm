@@ -165,6 +165,97 @@ grep -q "Result: healthy" /tmp/skills-doctor.log
 ${CLI} doctor --json >/tmp/skills-doctor-healthy.json
 grep -q '"result": "healthy"' /tmp/skills-doctor-healthy.json
 
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+sources:
+  - name: local
+    type: index
+    url: ./index.yaml
+skills:
+  - id: acme/app
+    version: ^1.0.0
+    source: local
+  - id: local/check
+    path: ./local-skills/local-check
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-install-no-project.log
+${CLI} list --resolved >/tmp/skills-list-resolved-no-project.log
+${CLI} snapshot >/tmp/skills-snapshot-no-project.log
+${CLI} doctor >/tmp/skills-doctor-no-project.log
+! grep -q '^project:' skills.lock
+grep -q "Result: healthy" /tmp/skills-doctor-no-project.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project: {}
+sources:
+  - name: local
+    type: index
+    url: ./index.yaml
+skills:
+  - id: acme/app
+    version: ^1.0.0
+    source: local
+  - id: local/check
+    path: ./local-skills/local-check
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-install-empty-project.log
+${CLI} list --resolved >/tmp/skills-list-resolved-empty-project.log
+${CLI} snapshot >/tmp/skills-snapshot-empty-project.log
+${CLI} doctor >/tmp/skills-doctor-empty-project.log
+grep -q '^project: {}$' skills.lock
+grep -q "Result: healthy" /tmp/skills-doctor-empty-project.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: smoke
+sources:
+  - name: local
+    type: index
+    url: ./index.yaml
+skills:
+  - id: acme/app
+    version: ^1.0.0
+    source: local
+  - id: local/check
+    path: ./local-skills/local-check
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+cat > skills.lock <<'EOF'
+schema: skills-lock/v1
+project: legacy-smoke
+resolved:
+  acme/app:
+    version: 1.0.0
+generated_at: 2026-03-11T00:00:00.000Z
+EOF
+
+${CLI} list --resolved >/tmp/skills-list-resolved-legacy-project.log
+${CLI} snapshot >/tmp/skills-snapshot-legacy-project.log
+${CLI} doctor >/tmp/skills-doctor-legacy-project.log
+grep -q "acme/app 1.0.0" /tmp/skills-list-resolved-legacy-project.log
+grep -q "Resolved skills (1)" /tmp/skills-snapshot-legacy-project.log
+grep -q "Result: healthy" /tmp/skills-doctor-legacy-project.log
+${CLI} freeze >/tmp/skills-freeze-legacy-project.log
+grep -q '^project:$' skills.lock
+grep -q '^  name: smoke$' skills.lock
+! grep -q '^project: legacy-smoke$' skills.lock
+
 cat > skills.lock <<'EOF'
 schema: skills-lock/v1
 resolved:

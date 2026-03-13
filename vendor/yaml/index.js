@@ -121,6 +121,9 @@ export function stringify(value, options = {}) {
       return [`${prefix}${key}:`, ...entryValue.flatMap((item) => emitArrayItem(item, depth + 1))];
     }
     if (entryValue && typeof entryValue === "object") {
+      if (Object.keys(entryValue).length === 0) {
+        return [`${prefix}${key}: {}`];
+      }
       const nested = emit(entryValue, depth + 1);
       return [`${prefix}${key}:`, ...nested];
     }

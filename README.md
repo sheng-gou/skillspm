@@ -238,6 +238,7 @@ This keeps installs explicit and reproducible.
 ### Key fields
 
 * `schema`: manifest version
+* `project`: optional project-level metadata such as an optional `project.name`
 * `sources`: optional declared sources
 * `skills`: the root skills in this environment
 * `targets`: where installed skills should be synced
@@ -282,6 +283,8 @@ then `skills.lock` records:
 It is mainly used to lock the resolved skills versions and sources, so the same environment can be reproduced later across machines, repos, and agents.
 
 In most cases, you do not edit `skills.lock` by hand. It is produced by `skillspm install` / `skillspm freeze`.
+
+When present, `project.name` is optional project-level metadata carried forward from `skills.yaml`.
 
 ### What it is for
 

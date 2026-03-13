@@ -20,7 +20,15 @@ export async function loadLockfile(cwd: string): Promise<SkillsLock | undefined>
 
 export async function writeLockfile(cwd: string, lockfile: SkillsLock): Promise<void> {
   const lockPath = path.join(cwd, LOCK_FILE);
-  await writeYamlDocument(lockPath, lockfile);
+  const normalizedProject = canonicalizeProjectMetadata(lockfile.project);
+  const normalizedLockfile = {
+    ...lockfile,
+    ...(normalizedProject !== undefined ? { project: normalizedProject } : {})
+  } as SkillsLock;
+  if (normalizedProject === undefined) {
+    delete (normalizedLockfile as Partial<SkillsLock>).project;
+  }
+  await writeYamlDocument(lockPath, normalizedLockfile);
 }
 
 function validateLockfile(lockfile: unknown): SkillsLock {
@@ -42,9 +50,7 @@ function validateLockfile(lockfile: unknown): SkillsLock {
   if (typeof value.generated_at !== "string") {
     errors.push("generated_at must be a string");
   }
-  if (value.project !== undefined && (typeof value.project !== "object" || value.project === null || Array.isArray(value.project))) {
-    errors.push("project must be an object");
-  }
+  const project = normalizeLockfileProject(value.project, errors);
 
   for (const [skillId, entry] of Object.entries(value.resolved ?? {})) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -110,5 +116,48 @@ function validateLockfile(lockfile: unknown): SkillsLock {
     throw new CliError(`skills.lock is invalid:\n- ${errors.join("\n- ")}`, 2);
   }
 
-  return value as SkillsLock;
+  const normalizedLockfile = {
+    ...value,
+    ...(project !== undefined ? { project } : {})
+  } as SkillsLock;
+  if (project === undefined) {
+    delete (normalizedLockfile as Partial<SkillsLock>).project;
+  }
+  return normalizedLockfile;
+}
+
+function normalizeLockfileProject(project: unknown, errors: string[]): SkillsLock["project"] | undefined {
+  if (project === undefined) {
+    return undefined;
+  }
+  if (typeof project === "string") {
+    return { name: project };
+  }
+  if (!project || typeof project !== "object" || Array.isArray(project)) {
+    errors.push("project must be an object");
+    return undefined;
+  }
+  const value = project as { name?: unknown };
+  if (value.name !== undefined && typeof value.name !== "string") {
+    errors.push("project.name must be a string");
+    return undefined;
+  }
+  return value.name === undefined ? {} : { name: value.name };
+}
+
+function canonicalizeProjectMetadata(project: unknown): SkillsLock["project"] | undefined {
+  if (project === undefined) {
+    return undefined;
+  }
+  if (typeof project === "string") {
+    return { name: project };
+  }
+  if (!project || typeof project !== "object" || Array.isArray(project)) {
+    return undefined;
+  }
+  const value = project as { name?: unknown };
+  if (value.name !== undefined && typeof value.name !== "string") {
+    return undefined;
+  }
+  return value.name === undefined ? {} : { name: value.name };
 }
