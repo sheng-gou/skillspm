@@ -86,28 +86,27 @@ skillspm inspect ./my-skill --write
 
 ## Install
 
-Install with npm directly from this GitHub repo's `main` ref:
+> **npm package coming soon.**
+
+We plan to publish SkillsPM to npm soon.
+
+For now, the GitHub source install path should be treated as a development / preview path, not the default public installation method.
+
+If you want to try SkillsPM before npm publishing:
 
 ```bash
-npm install -g git+https://github.com/sheng-gou/skillspm.git#main
+git clone https://github.com/sheng-gou/skillspm.git
+cd skillspm
+npm install
+npm run build
+npm link
 ```
 
-Or use the GitHub-hosted install script:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | sh
-```
-
-The install script currently uses npm with this GitHub repo under the hood:
-`npm install -g git+https://github.com/sheng-gou/skillspm.git#main`.
-
-If you want to inspect the script before running it:
+If you want to inspect the current GitHub install script before we finalize the release path:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh
 ```
-
-A native release-based installation flow may be added later. For now, npm plus this GitHub repo is the supported install path.
 
 ## Quick start
 

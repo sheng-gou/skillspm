@@ -86,28 +86,27 @@ skillspm inspect ./my-skill --write
 
 ## 安装
 
-直接通过 npm 从这个 GitHub 仓库的 `main` 引用安装：
+> **npm package coming soon.**
+
+我们会尽快把 SkillsPM 发布到 npm。
+
+在正式发布前，GitHub 源码安装路径更适合作为开发 / 预览方式，不建议当作默认的公开安装入口。
+
+如果你想在 npm 发布前先试用 SkillsPM：
 
 ```bash
-npm install -g git+https://github.com/sheng-gou/skillspm.git#main
+git clone https://github.com/sheng-gou/skillspm.git
+cd skillspm
+npm install
+npm run build
+npm link
 ```
 
-也可以使用 GitHub 托管的安装脚本：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | sh
-```
-
-当前这个安装脚本底层仍然是通过 npm 安装这个 GitHub 仓库：
-`npm install -g git+https://github.com/sheng-gou/skillspm.git#main`。
-
-如果你希望先检查脚本内容，再决定是否执行：
+如果你想先查看当前的 GitHub 安装脚本，再决定是否使用：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh
 ```
-
-后续可能会补充基于原生 release 的安装方式；现阶段，正式支持的安装路径仍然是 npm + 这个 GitHub 仓库。
 
 ## 快速开始
 
