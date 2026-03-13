@@ -422,3 +422,5 @@ skills inspect <path> --write
 npm install
 npm test
 ```
+
+关于维护者：见 [HUMAN.md](HUMAN.md)

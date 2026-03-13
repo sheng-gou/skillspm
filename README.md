@@ -424,3 +424,5 @@ Not implemented yet or still limited:
 npm install
 npm test
 ```
+
+About the maintainer: [HUMAN.md](HUMAN.md)
