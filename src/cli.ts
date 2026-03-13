@@ -45,12 +45,12 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 
   const program = new Command();
-  program.name("skillspm").description("Manage reproducible agent skills environments");
+  program.name("skillspm").description("Manage declarative, reproducible Skills environments");
 
   withScopeOption(
     program
       .command("init")
-      .description("Initialize skills.yaml and the local install root")
+      .description("Create a starter skills.yaml for the selected scope")
       .option("--force", "Overwrite existing skills.yaml")
   ).action(async (options: { force?: boolean; global?: boolean }) => {
     const layout = resolveScopeLayout(process.cwd(), options.global);
@@ -801,7 +801,7 @@ function renderHelp(commandName?: string): string {
     return [
       "Usage: skillspm init [options]",
       "",
-      "Initialize skills.yaml and the local install root",
+      "Create a starter skills.yaml for the selected scope",
       "",
       "Options:",
       "  --force           Overwrite existing skills.yaml",
@@ -969,25 +969,31 @@ function renderHelp(commandName?: string): string {
   return [
     "Usage: skillspm <command> [options]",
     "",
-    "Manage reproducible agent skills environments",
+    "Manage declarative, reproducible Skills environments",
     "Default scope: project (use -g/--global for ~/.skills)",
     "",
-    "Commands:",
-    "  init              Initialize skills.yaml and the selected install root",
-    "  add               Add a root skill to skills.yaml",
-    "  remove            Remove a root skill from skills.yaml",
+    "Core workflow:",
     "  install           Resolve and install skills into the selected scope",
-    "  update            Refresh installed skills from the current manifest",
-    "  bootstrap         Install, optionally auto-sync, then run doctor",
     "  freeze            Rewrite skills.lock from the installed state",
+    "  sync              Sync installed skills to target directories",
     "  import            Discover existing skills and merge them into skills.yaml",
+    "  inspect           Inspect a local skill directory and generate minimal metadata",
+    "",
+    "Inspection and diagnostics:",
     "  doctor            Check skills health",
     "  list              List root or resolved skills",
     "  snapshot          Summarize the selected skills environment",
     "  why               Explain why a skill is installed",
-    "  sync              Sync installed skills to target directories",
+    "",
+    "Manifest helpers:",
+    "  init              Create a starter skills.yaml for the selected scope",
+    "  add               Add a root skill to skills.yaml",
+    "  remove            Remove a root skill from skills.yaml",
     "  target            Manage sync targets",
-    "  inspect           Inspect a local skill directory and generate minimal metadata",
+    "",
+    "Other commands:",
+    "  update            Refresh installed skills from the current manifest",
+    "  bootstrap         Install, optionally auto-sync, then run doctor",
     "",
     "Run `skillspm <command> --help` for command-specific usage."
   ].join("\n");
