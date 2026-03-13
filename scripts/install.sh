@@ -22,7 +22,7 @@ fi
 
 say "Installing SkillsPM with npm from this GitHub repository..."
 
-if [ "${SKILLS_INSTALL_DRY_RUN:-0}" = "1" ]; then
+if [ "${SKILLSPM_INSTALL_DRY_RUN:-0}" = "1" ]; then
   say "Dry run: npm install -g $INSTALL_TARGET"
   exit 0
 fi

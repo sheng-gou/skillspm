@@ -4,11 +4,11 @@
   <img src="./docs/social-preview.png" alt="SkillsPM social preview" />
 </p>
 
-<div align="center">
-
 ## `skills.yaml` 是唯一事实来源。
 
 从它安装、冻结，并在不同 agent 与项目之间同步。
+
+<div align="center">
 
 ![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)
 ![Codex](https://img.shields.io/badge/Codex-Supported-111111.svg)
@@ -71,6 +71,8 @@ skillspm sync claude_code
 skillspm import --from openclaw
 skillspm install
 ```
+
+把已有的 Skills 配置接管进当前受管环境。默认会扫描当前工作目录，以及默认的 OpenClaw skills 目录。
 
 ### 把原始文件夹变成可管理的 skill
 
@@ -213,7 +215,7 @@ settings:
 当前版本的主要来源类型是：
 
 * 本地 path
-* 声明好的本地 YAML 来源文件
+* 声明式本地来源文件
 
 这样可以保证安装过程是显式的、可复现的。
 

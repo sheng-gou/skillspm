@@ -18,7 +18,8 @@
   "files": [
     "dist",
     "docs/social-preview.png",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "node ./scripts/build.mjs",

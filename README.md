@@ -4,11 +4,11 @@
   <img src="./docs/social-preview.png" alt="SkillsPM social preview" />
 </p>
 
-<div align="center">
-
 ## The source of truth is `skills.yaml`.
 
 Install from it, freeze it, and sync it across agents and projects.
+
+<div align="center">
 
 ![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)
 ![Codex](https://img.shields.io/badge/Codex-Supported-111111.svg)
@@ -71,6 +71,8 @@ skillspm sync claude_code
 skillspm import --from openclaw
 skillspm install
 ```
+
+Imports an existing setup into the current managed environment. By default it can scan the current working tree and the default OpenClaw skills directory.
 
 ### Turn a raw folder into a managed skill
 
@@ -213,7 +215,7 @@ settings:
 In the current release, the main source types are:
 
 * local paths
-* declared local YAML source files
+* declared local source files
 
 This keeps installs explicit and reproducible.
 
