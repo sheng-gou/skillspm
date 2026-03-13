@@ -4,11 +4,10 @@
   <img src="./docs/social-preview.jpg" alt="SkillsPM social preview" />
 </p>
 
-## `skills.yaml` 是唯一事实来源。
-
-从它安装、冻结，并在不同 agent 与项目之间同步。
-
 <div align="center">
+
+<h2><code>skills.yaml</code> 是唯一事实来源。</h2>
+<p>从它安装、冻结，并在不同 agent 与项目之间同步。</p>
 
 ![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)
 ![Codex](https://img.shields.io/badge/Codex-Supported-111111.svg)

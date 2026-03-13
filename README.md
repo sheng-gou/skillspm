@@ -4,11 +4,10 @@
   <img src="./docs/social-preview.jpg" alt="SkillsPM social preview" />
 </p>
 
-## The source of truth is `skills.yaml`.
-
-Install from it, freeze it, and sync it across agents and projects.
-
 <div align="center">
+
+<h2>The source of truth is <code>skills.yaml</code>.</h2>
+<p>Install from it, freeze it, and sync it across agents and projects.</p>
 
 ![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)
 ![Codex](https://img.shields.io/badge/Codex-Supported-111111.svg)
