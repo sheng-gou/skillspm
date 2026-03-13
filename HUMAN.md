@@ -30,7 +30,7 @@ skillspm freeze
 skillspm sync
 skillspm import --from openclaw
 skillspm inspect ./my-skill --write
-````
+```
 
 ### What each one does
 
