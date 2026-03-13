@@ -2,7 +2,7 @@
 
 Thanks for contributing to SkillsPM.
 
-SkillsPM is a package-manager-style CLI for managing reusable Skills environments for AI agents.
+SkillsPM is a declarative Skills environment manager built around `skills.yaml` as the source of truth and `skills.lock` as the frozen resolved state.
 
 This project is still early. Clear bug reports, small focused pull requests, and practical feedback are especially valuable.
 
