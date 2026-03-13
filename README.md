@@ -92,10 +92,10 @@ Install the latest release from npm:
 npm install -g skillspm
 ```
 
-If you want to pin the current `0.2.0` release explicitly:
+If you want to pin a specific release explicitly:
 
 ```bash
-npm install -g skillspm@0.2.0
+npm install -g skillspm@<version>
 ```
 
 Or use the install script, which now installs from npm by default:
@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/ins
 To pin a version through the install script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | SKILLSPM_VERSION=0.2.0 sh
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | SKILLSPM_VERSION=<version> sh
 ```
 
 If you want to inspect the install script before running it:

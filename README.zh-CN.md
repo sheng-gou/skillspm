@@ -92,10 +92,10 @@ skillspm inspect ./my-skill --write
 npm install -g skillspm
 ```
 
-如果你想显式固定当前 `0.2.0` 版本：
+如果你想显式固定某个版本：
 
 ```bash
-npm install -g skillspm@0.2.0
+npm install -g skillspm@<version>
 ```
 
 也可以使用安装脚本；它现在默认也是从 npm 安装：
@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/ins
 如果你想通过安装脚本固定版本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | SKILLSPM_VERSION=0.2.0 sh
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | SKILLSPM_VERSION=<version> sh
 ```
 
 如果你想先查看安装脚本内容，再决定是否执行：
