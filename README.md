@@ -1,7 +1,7 @@
 # SkillsPM
 
 <p align="center">
-  <img src="./docs/social-preview.png" alt="SkillsPM social preview" />
+  <img src="./docs/social-preview.jpg" alt="SkillsPM social preview" />
 </p>
 
 ## The source of truth is `skills.yaml`.
