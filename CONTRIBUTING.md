@@ -1,8 +1,8 @@
 # Contributing
 
-Thanks for contributing to `skills`.
+Thanks for contributing to SkillsPM.
 
-`skills` is a package-manager-style CLI for managing reusable Skills environments for AI agents.
+SkillsPM is a package-manager-style CLI for managing reusable Skills environments for AI agents.
 
 This project is still early. Clear bug reports, small focused pull requests, and practical feedback are especially valuable.
 

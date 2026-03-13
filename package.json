@@ -1,14 +1,23 @@
 {
-  "name": "skills",
+  "name": "skillspm",
   "version": "0.1.0",
   "description": "CLI for reproducible AI agent skills environments",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sheng-gou/skillspm.git"
+  },
+  "homepage": "https://github.com/sheng-gou/skillspm#readme",
+  "bugs": {
+    "url": "https://github.com/sheng-gou/skillspm/issues"
+  },
   "type": "module",
   "bin": {
-    "skills": "dist/bin/skills.js"
+    "skillspm": "dist/bin/skillspm.js"
   },
   "files": [
     "dist",
+    "docs/social-preview.png",
     "README.md"
   ],
   "scripts": {

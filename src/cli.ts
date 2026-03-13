@@ -45,7 +45,7 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 
   const program = new Command();
-  program.name("skills").description("Manage reproducible agent skills environments");
+  program.name("skillspm").description("Manage reproducible agent skills environments");
 
   withScopeOption(
     program
@@ -56,7 +56,7 @@ export async function runCli(argv: string[]): Promise<number> {
     const layout = resolveScopeLayout(process.cwd(), options.global);
     const manifestPath = path.join(layout.rootDir, MANIFEST_FILE);
     if ((await exists(manifestPath)) && !options.force) {
-      throw new CliError(`skills.yaml already exists for ${formatScopeLabel(layout.scope)}. Run \`skills init${layout.scope === "global" ? " -g" : ""} --force\` to overwrite it.`, 2);
+      throw new CliError(`skills.yaml already exists for ${formatScopeLabel(layout.scope)}. Run \`skillspm init${layout.scope === "global" ? " -g" : ""} --force\` to overwrite it.`, 2);
     }
 
     await ensureDir(layout.rootDir);
@@ -743,7 +743,7 @@ async function inspectSkill(commandCwd: string, input: string, options: { write?
   process.stdout.write(`${renderSkillMetadata(nextMetadata)}\n`);
   if (!options.write) {
     printInfo("");
-    printInfo(`Run \`skills inspect ${input} --write\` to write skill.yaml.`);
+    printInfo(`Run \`skillspm inspect ${input} --write\` to write skill.yaml.`);
   }
 }
 
@@ -799,7 +799,7 @@ function renderListSkillText(skill: {
 function renderHelp(commandName?: string): string {
   if (commandName === "init") {
     return [
-      "Usage: skills init [options]",
+      "Usage: skillspm init [options]",
       "",
       "Initialize skills.yaml and the local install root",
       "",
@@ -810,7 +810,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "add") {
     return [
-      "Usage: skills add <skill> [options]",
+      "Usage: skillspm add <skill> [options]",
       "",
       "Add a root skill to skills.yaml",
       "",
@@ -822,7 +822,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "remove") {
     return [
-      "Usage: skills remove <skill> [options]",
+      "Usage: skillspm remove <skill> [options]",
       "",
       "Remove a root skill from skills.yaml",
       "",
@@ -832,7 +832,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "install") {
     return [
-      "Usage: skills install [options]",
+      "Usage: skillspm install [options]",
       "",
       "Resolve and install skills into the selected scope",
       "",
@@ -842,7 +842,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "update") {
     return [
-      "Usage: skills update [skill] [options]",
+      "Usage: skillspm update [skill] [options]",
       "",
       "Refresh installed skills from the current manifest",
       "",
@@ -853,7 +853,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "bootstrap") {
     return [
-      "Usage: skills bootstrap [options]",
+      "Usage: skillspm bootstrap [options]",
       "",
       "Install, optionally auto-sync, then run doctor",
       "",
@@ -863,7 +863,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "freeze") {
     return [
-      "Usage: skills freeze [options]",
+      "Usage: skillspm freeze [options]",
       "",
       "Rewrite skills.lock from the currently installed state",
       "",
@@ -873,7 +873,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "import") {
     return [
-      "Usage: skills import [options]",
+      "Usage: skillspm import [options]",
       "",
       "Discover existing skills and merge them into skills.yaml",
       "",
@@ -884,7 +884,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "doctor") {
     return [
-      "Usage: skills doctor [options]",
+      "Usage: skillspm doctor [options]",
       "",
       "Check skills health",
       "",
@@ -895,7 +895,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "list") {
     return [
-      "Usage: skills list [options]",
+      "Usage: skillspm list [options]",
       "",
       "List root or resolved skills",
       "",
@@ -907,7 +907,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "snapshot") {
     return [
-      "Usage: skills snapshot [options]",
+      "Usage: skillspm snapshot [options]",
       "",
       "Summarize the selected skills environment",
       "",
@@ -919,7 +919,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "why") {
     return [
-      "Usage: skills why <skill> [options]",
+      "Usage: skillspm why <skill> [options]",
       "",
       "Explain why a skill is installed",
       "",
@@ -929,7 +929,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "sync") {
     return [
-      "Usage: skills sync [target] [options]",
+      "Usage: skillspm sync [target] [options]",
       "",
       "Sync installed skills to target directories",
       "",
@@ -940,7 +940,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "target") {
     return [
-      "Usage: skills target add <target> [options]",
+      "Usage: skillspm target add <target> [options]",
       "",
       "Manage sync targets",
       "",
@@ -954,7 +954,7 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "inspect") {
     return [
-      "Usage: skills inspect <path> [options]",
+      "Usage: skillspm inspect <path> [options]",
       "",
       "Inspect a local skill directory and generate minimal metadata",
       "",
@@ -967,7 +967,7 @@ function renderHelp(commandName?: string): string {
   }
 
   return [
-    "Usage: skills <command> [options]",
+    "Usage: skillspm <command> [options]",
     "",
     "Manage reproducible agent skills environments",
     "Default scope: project (use -g/--global for ~/.skills)",
@@ -989,7 +989,7 @@ function renderHelp(commandName?: string): string {
     "  target            Manage sync targets",
     "  inspect           Inspect a local skill directory and generate minimal metadata",
     "",
-    "Run `skills <command> --help` for command-specific usage."
+    "Run `skillspm <command> --help` for command-specific usage."
   ].join("\n");
 }
 

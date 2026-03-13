@@ -109,7 +109,7 @@ export async function freezeInstalledState(layout: ScopeLayout): Promise<SkillsL
     label: `cleanup root ${layout.installedRoot}`
   });
   if (!(await exists(layout.installedRoot))) {
-    throw new CliError("No installed skills found. Run `skills install` first.", 2);
+    throw new CliError("No installed skills found. Run `skillspm install` first.", 2);
   }
 
   const entries = (await readdir(layout.installedRoot, { withFileTypes: true }))
@@ -117,7 +117,7 @@ export async function freezeInstalledState(layout: ScopeLayout): Promise<SkillsL
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
   if (entries.length === 0) {
-    throw new CliError("No installed skills found. Run `skills install` first.", 2);
+    throw new CliError("No installed skills found. Run `skillspm install` first.", 2);
   }
 
   const existingLock = await loadLockfile(layout.rootDir);

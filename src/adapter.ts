@@ -44,7 +44,7 @@ export function resolveDefaultTargetPath(type: TargetType): string | undefined {
 
 export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest, options: SyncOptions = {}): Promise<void> {
   if (!(await exists(layout.installedRoot))) {
-    throw new CliError("No installed skills found. Run `skills install` first.", 2);
+    throw new CliError("No installed skills found. Run `skillspm install` first.", 2);
   }
   await resolveCleanupRoot(layout.installedRoot, {
     containmentRoot: resolveStateContainmentRoot(layout),
@@ -57,7 +57,7 @@ export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest,
     .sort((left, right) => left.localeCompare(right));
 
   if (installedEntries.length === 0) {
-    throw new CliError("No installed skills found. Run `skills install` first.", 2);
+    throw new CliError("No installed skills found. Run `skillspm install` first.", 2);
   }
 
   const targets = resolveTargets(layout.rootDir, manifest, options.targetType);

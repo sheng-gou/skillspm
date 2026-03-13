@@ -1,6 +1,6 @@
 # HUMAN.md
 
-Hi, I'm the maintainer of `skills`.
+Hi, I'm the maintainer of SkillsPM.
 
 This file is for human readers.
 
@@ -16,7 +16,7 @@ If you are an agent or working on agent-facing behavior, also read:
 
 ## Why I built this
 
-I built `skills` because managing Skills across different AI coding agents still feels messy.
+I built SkillsPM because managing Skills across different AI coding agents still feels messy.
 
 In practice, teams often need to:
 
@@ -26,11 +26,11 @@ In practice, teams often need to:
 - sync it across agents
 - import existing setups instead of rebuilding from scratch
 
-`skills` is my attempt to make that workflow simpler and more explicit.
+SkillsPM is my attempt to make that workflow simpler and more explicit.
 
 ## What this project is trying to be
 
-`skills` is intended to be a package-manager-style CLI for reusable Skills environments for AI agents.
+SkillsPM is intended to be a package-manager-style CLI for reusable Skills environments for AI agents.
 
 At the center of that idea is:
 
@@ -47,7 +47,7 @@ The main workflow is intentionally small:
 
 ## What this project is not trying to be (yet)
 
-Right now, `skills` is not trying to be:
+Right now, SkillsPM is not trying to be:
 
 - a full remote registry platform
 - a hosted marketplace

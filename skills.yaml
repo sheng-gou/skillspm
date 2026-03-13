@@ -1,0 +1,9 @@
+schema: skills/v1
+project:
+  name: skillspm
+sources: []
+skills: []
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false

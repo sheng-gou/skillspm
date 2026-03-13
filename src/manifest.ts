@@ -135,7 +135,7 @@ function validateTarget(target: Partial<ManifestTarget>, errors: string[]): void
 export async function loadManifest(cwd: string): Promise<SkillsManifest> {
   const manifestPath = path.join(cwd, MANIFEST_FILE);
   if (!(await exists(manifestPath))) {
-    throw new CliError("skills.yaml not found. Run `skills init` first.", 2);
+    throw new CliError("skills.yaml not found. Run `skillspm init` first.", 2);
   }
   return validateManifest(await readDocument<unknown>(manifestPath));
 }

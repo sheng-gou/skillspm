@@ -2,25 +2,25 @@
 
 set -eu
 
-INSTALL_TARGET='git+https://github.com/sheng-gou/skills-cli.git#main'
+INSTALL_TARGET='git+https://github.com/sheng-gou/skillspm.git#main'
 
 say() {
   printf '%s\n' "$*" >&2
 }
 
 if ! command -v node >/dev/null 2>&1; then
-  say "Error: Node.js is required to install skills."
+  say "Error: Node.js is required to install SkillsPM."
   say "Install Node.js 18 or newer, then run this script again."
   exit 1
 fi
 
 if ! command -v npm >/dev/null 2>&1; then
-  say "Error: npm is required to install skills."
+  say "Error: npm is required to install SkillsPM."
   say "Install npm with your Node.js setup, then run this script again."
   exit 1
 fi
 
-say "Installing skills with npm from this GitHub repository..."
+say "Installing SkillsPM with npm from this GitHub repository..."
 
 if [ "${SKILLS_INSTALL_DRY_RUN:-0}" = "1" ]; then
   say "Dry run: npm install -g $INSTALL_TARGET"
@@ -33,4 +33,4 @@ if ! npm install -g "$INSTALL_TARGET"; then
   exit 1
 fi
 
-say "skills is installed. Run 'skills --help' to get started."
+say "SkillsPM is installed. Run 'skillspm --help' to get started."

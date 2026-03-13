@@ -4,7 +4,7 @@ Guidance for coding agents working in this repo.
 
 ## Mission
 
-`skills` is a **reproducible skills environment manager**, not just a folder copier.
+SkillsPM is a **reproducible skills environment manager**, not just a folder copier.
 
 Keep changes aligned with these product truths:
 
@@ -33,27 +33,27 @@ npm test
 
 When working in this repo, treat these as explicit operational rules:
 
-- If the repo already contains `skills.yaml`, run `skills install` to materialize the repo-scoped environment.
-- Then run `skills doctor --json` to confirm the environment is healthy.
-- If targets are already configured, run `skills sync` for the affected target or scope.
-- If you add a new raw skill directory, run `skills inspect <path> --write` to generate the minimal metadata scaffold (and `skills inspect <path> --json` when you need a machine-readable report).
-- If any flow fails, run `skills doctor --json` before handoff.
+- If the repo already contains `skills.yaml`, run `skillspm install` to materialize the repo-scoped environment.
+- Then run `skillspm doctor --json` to confirm the environment is healthy.
+- If targets are already configured, run `skillspm sync` for the affected target or scope.
+- If you add a new raw skill directory, run `skillspm inspect <path> --write` to generate the minimal metadata scaffold (and `skillspm inspect <path> --json` when you need a machine-readable report).
+- If any flow fails, run `skillspm doctor --json` before handoff.
 
 Required command flows to keep working while you edit:
 
 ```bash
 # materialize a repo-scoped environment
-skills install
+skillspm install
 
 # machine-readable health check
-skills doctor --json
+skillspm doctor --json
 
 # sync configured targets when needed
-skills sync codex --mode symlink
+skillspm sync codex --mode symlink
 
 # inspect and generate minimal metadata (requires SKILL.md)
-skills inspect ./local-skills/example --json
-skills inspect ./local-skills/example --write
+skillspm inspect ./local-skills/example --json
+skillspm inspect ./local-skills/example --write
 ```
 
 Primary entry points:

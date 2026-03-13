@@ -100,7 +100,7 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
     warningCount += 1;
     findings.push({
       level: "warning",
-      message: `no skills.lock found; run \`skills install${layout.scope === "global" ? " -g" : ""}\` to resolve dependencies`
+      message: `no skills.lock found; run \`skillspm install${layout.scope === "global" ? " -g" : ""}\` to resolve dependencies`
     });
   } else {
     resolvedSkillCount = Object.keys(lockfile.resolved).length;

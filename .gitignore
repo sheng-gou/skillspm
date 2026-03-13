@@ -4,3 +4,7 @@ dist/
 *.log
 .npm-cache/
 *.tgz
+
+# Local maintainer/workspace-only files
+.learnings/
+requirements-bundle.md

@@ -14,7 +14,7 @@ cd "${WORK_DIR}"
 
 ${CLI} init >/tmp/skills-init.log
 ${CLI} --help >/tmp/skills-help.log
-grep -q "Usage: skills <command> \\[options\\]" /tmp/skills-help.log
+grep -q "Usage: skillspm <command> \\[options\\]" /tmp/skills-help.log
 
 ${CLI} add acme/plain >/tmp/skills-add-null.log
 grep -q "acme/plain" skills.yaml
@@ -1159,7 +1159,7 @@ ${CLI} target --help >/tmp/skills-target-help.log
 grep -q "generic" /tmp/skills-target-help.log
 grep -q -- "--path <path>" /tmp/skills-target-help.log
 ${CLI} update --help >/tmp/skills-update-help.log
-grep -q "Usage: skills update" /tmp/skills-update-help.log
+grep -q "Usage: skillspm update" /tmp/skills-update-help.log
 grep -q -- "--to <version>" /tmp/skills-update-help.log
 
 UPDATE_DIR="${TMP_DIR}/update-workspace"
@@ -1669,12 +1669,12 @@ if [ "${SKILLS_SKIP_PACKAGING_TEST:-0}" != "1" ]; then
   test -f "${PACK_TMP}/package/node_modules/semver/package.json"
   test -f "${PACK_TMP}/package/node_modules/yaml/package.json"
   npm install -g --prefix "${PACK_PREFIX}" "${ROOT_DIR}/${PACK_NAME}" >/tmp/skills-packed-install.log
-  "${PACK_PREFIX}/bin/skills" --help >/tmp/skills-packed-help.log
-  grep -q "Usage: skills <command> \\[options\\]" /tmp/skills-packed-help.log
+  "${PACK_PREFIX}/bin/skillspm" --help >/tmp/skills-packed-help.log
+  grep -q "Usage: skillspm <command> \\[options\\]" /tmp/skills-packed-help.log
 
   mkdir -p "${PACK_WORKSPACE}/local-skills/packed-check"
   cd "${PACK_WORKSPACE}"
-  "${PACK_PREFIX}/bin/skills" init >/tmp/skills-packed-init.log
+  "${PACK_PREFIX}/bin/skillspm" init >/tmp/skills-packed-init.log
 
   cat > local-skills/packed-check/SKILL.md <<'EOF'
 # packed
@@ -1690,8 +1690,8 @@ package:
   entry: ./
 EOF
 
-  "${PACK_PREFIX}/bin/skills" add ./local-skills/packed-check >/tmp/skills-packed-add.log
-  "${PACK_PREFIX}/bin/skills" install >/tmp/skills-packed-chain-install.log
+  "${PACK_PREFIX}/bin/skillspm" add ./local-skills/packed-check >/tmp/skills-packed-add.log
+  "${PACK_PREFIX}/bin/skillspm" install >/tmp/skills-packed-chain-install.log
 
   test -f skills.lock
   test -d .skills/installed/local__packed-check@0.8.0

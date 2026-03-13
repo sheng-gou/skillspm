@@ -1,10 +1,14 @@
-# skills
+# SkillsPM
 
 <p align="center">
-  <img src="./docs/social-preview.png" alt="skills social preview" />
+  <img src="./docs/social-preview.png" alt="SkillsPM social preview" />
 </p>
 
 <div align="center">
+
+## The source of truth is `skills.yaml`.
+
+Install from it, freeze it, and sync it across agents and projects.
 
 ![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)
 ![Codex](https://img.shields.io/badge/Codex-Supported-111111.svg)
@@ -13,13 +17,11 @@
 ![Import_+_Sync](https://img.shields.io/badge/Import_+_Sync-Multi_Agent-2563EB.svg)
 ![Agent_Friendly](https://img.shields.io/badge/Agent-Friendly-0EA5E9.svg)
 
-**Package-manager-style Skills environments for AI agents**
-
 English | [中文](README.zh-CN.md)
 
 </div>
 
-`skills` uses a `skills.yaml` file as the source of truth for a reusable skills environment.
+SkillsPM uses a `skills.yaml` file as the source of truth for a reusable skills environment.
 
 Core workflow:
 
@@ -41,39 +43,39 @@ Teams still:
 - create ad-hoc skill folders with no version or metadata
 - struggle to move an existing setup from one agent to another
 
-`skills` turns that into a reproducible workflow centered around `skills.yaml`.
+SkillsPM turns that into a reproducible workflow centered around `skills.yaml`.
 
 ## Core commands
 
 ### Install a skills environment from `skills.yaml`
 
 ```bash
-skills install
+skillspm install
 ```
 
 ### Freeze the current environment into `skills.lock`
 
 ```bash
-skills freeze
+skillspm freeze
 ```
 
 ### Sync installed skills to another agent
 
 ```bash
-skills sync claude_code
+skillspm sync claude_code
 ```
 
 ### Import an existing setup
 
 ```bash
-skills import --from openclaw
-skills install
+skillspm import --from openclaw
+skillspm install
 ```
 
 ### Turn a raw folder into a managed skill
 
 ```bash
-skills inspect ./my-skill --write
+skillspm inspect ./my-skill --write
 ```
 
 ## Requirements
@@ -86,22 +88,22 @@ skills inspect ./my-skill --write
 Install with npm directly from this GitHub repo's `main` ref:
 
 ```bash
-npm install -g git+https://github.com/sheng-gou/skills-cli.git#main
+npm install -g git+https://github.com/sheng-gou/skillspm.git#main
 ```
 
 Or use the GitHub-hosted install script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skills-cli/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | sh
 ```
 
 The install script currently uses npm with this GitHub repo under the hood:
-`npm install -g git+https://github.com/sheng-gou/skills-cli.git#main`.
+`npm install -g git+https://github.com/sheng-gou/skillspm.git#main`.
 
 If you want to inspect the script before running it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skills-cli/main/scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh
 ```
 
 A native release-based installation flow may be added later. For now, npm plus this GitHub repo is the supported install path.
@@ -127,19 +129,19 @@ targets:
 ### 2. Install it
 
 ```bash
-skills install
+skillspm install
 ```
 
 ### 3. Sync it to an agent
 
 ```bash
-skills sync claude_code
+skillspm sync claude_code
 ```
 
 ### 4. Freeze the current state
 
 ```bash
-skills freeze
+skillspm freeze
 ```
 
 ## `skills.yaml`
@@ -153,12 +155,12 @@ It declares:
 * which agents or targets should receive them
 * optional install and sync behavior
 
-`skills install` reads `skills.yaml`, resolves skills from the declared sources, and installs them into the local `.skills` workspace.
+`skillspm install` reads `skills.yaml`, resolves skills from the declared sources, and installs them into the local `.skills` workspace.
 
 After that:
 
-* `skills freeze` writes the resolved state into `skills.lock`
-* `skills sync` pushes the installed environment from `.skills` to one or more agents
+* `skillspm freeze` writes the resolved state into `skills.lock`
+* `skillspm sync` pushes the installed environment from `.skills` to one or more agents
 
 ### Minimal example
 
@@ -204,9 +206,9 @@ settings:
   auto_sync: true
 ```
 
-### Where `skills install` gets skills from
+### Where `skillspm install` gets skills from
 
-`skills install` only installs skills from sources declared in `skills.yaml`.
+`skillspm install` only installs skills from sources declared in `skills.yaml`.
 
 In the current release, the main source types are:
 
@@ -261,7 +263,7 @@ then `skills.lock` records:
 
 It is mainly used to lock the resolved skills versions and sources, so the same environment can be reproduced later across machines, repos, and agents.
 
-In most cases, you do not edit `skills.lock` by hand. It is produced by `skills install` / `skills freeze`.
+In most cases, you do not edit `skills.lock` by hand. It is produced by `skillspm install` / `skillspm freeze`.
 
 ### What it is for
 
@@ -273,8 +275,8 @@ In most cases, you do not edit `skills.lock` by hand. It is produced by `skills 
 ### Typical workflow
 
 * edit `skills.yaml` to describe the desired environment
-* run `skills install` to resolve and install it
-* run `skills freeze` to write the resolved state into `skills.lock`
+* run `skillspm install` to resolve and install it
+* run `skillspm freeze` to write the resolved state into `skills.lock`
 
 ### In short
 
@@ -286,9 +288,9 @@ In most cases, you do not edit `skills.lock` by hand. It is produced by `skills 
 ### Manage a repo-local skills environment
 
 ```bash
-skills install
-skills sync
-skills freeze
+skillspm install
+skillspm sync
+skillspm freeze
 ```
 
 ### Manage a global skills baseline
@@ -296,24 +298,24 @@ skills freeze
 This assumes you already have a global ~/.skills/skills.yaml manifest.
 
 ```bash
-skills install -g
-skills sync -g
-skills freeze -g
+skillspm install -g
+skillspm sync -g
+skillspm freeze -g
 ```
 
 ### Import existing skills from OpenClaw
 
 ```bash
-skills import --from openclaw
-skills install
-skills sync
+skillspm import --from openclaw
+skillspm install
+skillspm sync
 ```
 
 ### Normalize a newly created skill folder
 
 ```bash
-skills inspect ./scratch/my-new-skill --write
-skills install
+skillspm inspect ./scratch/my-new-skill --write
+skillspm install
 ```
 
 ## How it works
@@ -353,48 +355,48 @@ Recommended usage:
 
 | Command                              | Description                                              |
 | ------------------------------------ | -------------------------------------------------------- |
-| `skills install [-g]`                | Resolve and install the skills declared in `skills.yaml` |
-| `skills update [skill] [-g]`         | Refresh root skill versions from configured sources or pin one skill |
-| `skills freeze [-g]`                 | Write the current installation state into `skills.lock`  |
-| `skills sync [target] [-g]`          | Sync installed skills to one or more targets             |
-| `skills import [--from <source>] [-g]` | Import skills from an agent or local path              |
-| `skills inspect <path> --write`      | Generate or complete `skill.yaml` for a raw skill folder |
+| `skillspm install [-g]`                | Resolve and install the skills declared in `skills.yaml` |
+| `skillspm update [skill] [-g]`         | Refresh root skill versions from configured sources or pin one skill |
+| `skillspm freeze [-g]`                 | Write the current installation state into `skills.lock`  |
+| `skillspm sync [target] [-g]`          | Sync installed skills to one or more targets             |
+| `skillspm import [--from <source>] [-g]` | Import skills from an agent or local path              |
+| `skillspm inspect <path> --write`      | Generate or complete `skill.yaml` for a raw skill folder |
 
 ## Other commands
 
 | Command                                  | Description                                                  |
 | ---------------------------------------- | ------------------------------------------------------------ |
-| `skills snapshot [--json] [-g]`          | Export the current skills environment                        |
-| `skills doctor [--json] [-g]`            | Diagnose environment health                                  |
-| `skills init [-g]`                       | Create a starter `skills.yaml` for a project or global scope |
-| `skills add <skill> [-g]`                | Add a root skill entry to `skills.yaml`                      |
-| `skills remove <skill> [-g]`             | Remove a root skill entry from `skills.yaml`                 |
-| `skills list [--resolved] [--json] [-g]` | Show skills in the current scope                             |
-| `skills why <skill> [-g]`                | Explain why a skill is installed                             |
-| `skills target add <target> [-g]`        | Add a target agent to the current scope                      |
-| `skills bootstrap [-g]`                  | Shortcut for `install + doctor (+ sync if enabled)`          |
+| `skillspm snapshot [--json] [-g]`          | Export the current skills environment                        |
+| `skillspm doctor [--json] [-g]`            | Diagnose environment health                                  |
+| `skillspm init [-g]`                       | Create a starter `skills.yaml` for a project or global scope |
+| `skillspm add <skill> [-g]`                | Add a root skill entry to `skills.yaml`                      |
+| `skillspm remove <skill> [-g]`             | Remove a root skill entry from `skills.yaml`                 |
+| `skillspm list [--resolved] [--json] [-g]` | Show skills in the current scope                             |
+| `skillspm why <skill> [-g]`                | Explain why a skill is installed                             |
+| `skillspm target add <target> [-g]`        | Add a target agent to the current scope                      |
+| `skillspm bootstrap [-g]`                  | Shortcut for `install + doctor (+ sync if enabled)`          |
 
-`skills import` scans the current working tree and the default OpenClaw skills directory by default. Use `--from openclaw`, `--from codex`, `--from claude_code`, or `--from <path>` to import from one explicit source.
+`skillspm import` scans the current working tree and the default OpenClaw skills directory by default. Use `--from openclaw`, `--from codex`, `--from claude_code`, or `--from <path>` to import from one explicit source.
 
 ## For agents
 
 If a repo contains `skills.yaml`, an agent should usually run:
 
 ```bash
-skills install
-skills doctor --json
+skillspm install
+skillspm doctor --json
 ```
 
 If targets are already configured, the agent may also run:
 
 ```bash
-skills sync
+skillspm sync
 ```
 
 If a newly created skill folder lacks metadata:
 
 ```bash
-skills inspect <path> --write
+skillspm inspect <path> --write
 ```
 
 Agents should not edit `skills.lock` by hand unless explicitly asked.
