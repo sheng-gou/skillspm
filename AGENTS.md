@@ -33,29 +33,27 @@ npm test
 
 When working in this repo, treat these as explicit operational rules:
 
-- If the repo already contains `skills.yaml`, run `skills bootstrap` to materialize the repo-scoped environment.
-- If you add a new skill directory, run `skills inspect <path> --write` to generate the minimal metadata scaffold (and `skills inspect <path> --json` when you need a machine-readable report).
-- If you add a new target agent, run `skills target add <target>` and then `skills sync <target>`.
+- If the repo already contains `skills.yaml`, run `skills install` to materialize the repo-scoped environment.
+- Then run `skills doctor --json` to confirm the environment is healthy.
+- If targets are already configured, run `skills sync` for the affected target or scope.
+- If you add a new raw skill directory, run `skills inspect <path> --write` to generate the minimal metadata scaffold (and `skills inspect <path> --json` when you need a machine-readable report).
 - If any flow fails, run `skills doctor --json` before handoff.
 
 Required command flows to keep working while you edit:
 
 ```bash
-# bootstrap a repo-scoped environment
-skills init
-skills add ./local-skills/example
-skills bootstrap
+# materialize a repo-scoped environment
+skills install
+
+# machine-readable health check
+skills doctor --json
+
+# sync configured targets when needed
+skills sync codex --mode symlink
 
 # inspect and generate minimal metadata (requires SKILL.md)
 skills inspect ./local-skills/example --json
 skills inspect ./local-skills/example --write
-
-# add a built-in target, then sync
-skills target add codex
-skills sync codex --mode symlink
-
-# machine-readable health check
-skills doctor --json
 ```
 
 Primary entry points:

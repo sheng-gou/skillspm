@@ -45,7 +45,7 @@ Teams still:
 
 ```bash
 skills install
-````
+```
 
 ### Freeze the current environment into `skills.lock`
 
@@ -63,6 +63,7 @@ skills sync claude_code
 
 ```bash
 skills import --from openclaw
+skills install
 ```
 
 ### Turn a raw folder into a managed skill
@@ -187,7 +188,7 @@ settings:
 In the current release, the main source types are:
 
 * local paths
-* local YAML source files
+* declared local source files
 
 This keeps installs explicit and reproducible.
 
@@ -268,6 +269,8 @@ skills freeze
 ```
 
 ### Manage a global skills baseline
+
+This assumes you already have a global ~/.skills/skills.yaml manifest.
 
 ```bash
 skills install -g
@@ -400,4 +403,3 @@ Not implemented yet or still limited:
 npm install
 npm test
 ```
-
