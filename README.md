@@ -86,13 +86,37 @@ skillspm inspect ./my-skill --write
 
 ## Install
 
-> **npm package coming soon.**
+Install the latest release from npm:
 
-We plan to publish SkillsPM to npm soon.
+```bash
+npm install -g skillspm
+```
 
-For now, the GitHub source install path should be treated as a development / preview path, not the default public installation method.
+If you want to pin the current `0.2.0` release explicitly:
 
-If you want to try SkillsPM before npm publishing:
+```bash
+npm install -g skillspm@0.2.0
+```
+
+Or use the install script, which now installs from npm by default:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | sh
+```
+
+To pin a version through the install script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh | SKILLSPM_VERSION=0.2.0 sh
+```
+
+If you want to inspect the install script before running it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh
+```
+
+If you want to work from source for development:
 
 ```bash
 git clone https://github.com/sheng-gou/skillspm.git
@@ -100,12 +124,6 @@ cd skillspm
 npm install
 npm run build
 npm link
-```
-
-If you want to inspect the current GitHub install script before we finalize the release path:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skillspm/main/scripts/install.sh
 ```
 
 ## Quick start
