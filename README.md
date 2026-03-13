@@ -188,7 +188,7 @@ settings:
 In the current release, the main source types are:
 
 * local paths
-* declared local source files
+* declared local YAML source files
 
 This keeps installs explicit and reproducible.
 
@@ -326,7 +326,7 @@ Recommended usage:
 * `skills.yaml`: manifest for the current scope
 * `skills.lock`: frozen installation state
 
-## Core commands reference
+## Command reference
 
 | Command                              | Description                                              |
 | ------------------------------------ | -------------------------------------------------------- |
@@ -373,6 +373,8 @@ If a newly created skill folder lacks metadata:
 ```bash
 skills inspect <path> --write
 ```
+
+Agents should not edit `skills.lock` by hand unless explicitly asked.
 
 Detailed agent-facing instructions should live in `AGENTS.md`.
 
