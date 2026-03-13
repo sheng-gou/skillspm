@@ -1,5 +1,9 @@
 # skills
 
+<p align="center">
+  <img src="./docs/social-preview.png" alt="skills social preview" />
+</p>
+
 <div align="center">
 
 ![OpenClaw](https://img.shields.io/badge/OpenClaw-Supported-7C3AED.svg)
