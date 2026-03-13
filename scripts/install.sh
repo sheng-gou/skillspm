@@ -2,7 +2,7 @@
 
 set -eu
 
-INSTALL_TARGET='git+https://github.com/sheng-gou/skills-cli.git#master'
+INSTALL_TARGET='git+https://github.com/sheng-gou/skills-cli.git#main'
 
 say() {
   printf '%s\n' "$*" >&2

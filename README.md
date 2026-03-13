@@ -79,25 +79,25 @@ skills inspect ./my-skill --write
 
 ## Install
 
-Install with npm directly from this GitHub repo's `master` ref:
+Install with npm directly from this GitHub repo's `main` ref:
 
 ```bash
-npm install -g git+https://github.com/sheng-gou/skills-cli.git#master
+npm install -g git+https://github.com/sheng-gou/skills-cli.git#main
 ```
 
 Or use the GitHub-hosted install script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skills-cli/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skills-cli/main/scripts/install.sh | sh
 ```
 
 The install script currently uses npm with this GitHub repo under the hood:
-`npm install -g git+https://github.com/sheng-gou/skills-cli.git#master`.
+`npm install -g git+https://github.com/sheng-gou/skills-cli.git#main`.
 
 If you want to inspect the script before running it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sheng-gou/skills-cli/master/scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/sheng-gou/skills-cli/main/scripts/install.sh
 ```
 
 A native release-based installation flow may be added later. For now, npm plus this GitHub repo is the supported install path.
