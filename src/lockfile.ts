@@ -67,9 +67,45 @@ function validateLockfile(lockfile: unknown): SkillsLock {
     }
     if (entry.source !== undefined && (typeof entry.source !== "object" || entry.source === null || Array.isArray(entry.source))) {
       errors.push(`resolved.${skillId}.source must be an object`);
+    } else if (entry.source) {
+      if (entry.source.type !== "index" && entry.source.type !== "git" && entry.source.type !== "path") {
+        errors.push(`resolved.${skillId}.source.type has unsupported value`);
+      }
+      if (entry.source.name !== undefined && typeof entry.source.name !== "string") {
+        errors.push(`resolved.${skillId}.source.name must be a string`);
+      }
+      if (entry.source.url !== undefined && typeof entry.source.url !== "string") {
+        errors.push(`resolved.${skillId}.source.url must be a string`);
+      }
+      if (entry.source.revision !== undefined && typeof entry.source.revision !== "string") {
+        errors.push(`resolved.${skillId}.source.revision must be a string`);
+      }
     }
     if (entry.artifact !== undefined && (typeof entry.artifact !== "object" || entry.artifact === null || Array.isArray(entry.artifact))) {
       errors.push(`resolved.${skillId}.artifact must be an object`);
+    } else if (entry.artifact) {
+      if (entry.artifact.type !== "path") {
+        errors.push(`resolved.${skillId}.artifact.type must be path`);
+      }
+      if (entry.artifact.url !== undefined && typeof entry.artifact.url !== "string") {
+        errors.push(`resolved.${skillId}.artifact.url must be a string`);
+      }
+    }
+    if (entry.materialization !== undefined && (typeof entry.materialization !== "object" || entry.materialization === null || Array.isArray(entry.materialization))) {
+      errors.push(`resolved.${skillId}.materialization must be an object`);
+    } else if (entry.materialization) {
+      if (entry.materialization.type !== "live" && entry.materialization.type !== "pack") {
+        errors.push(`resolved.${skillId}.materialization.type has unsupported value`);
+      }
+      if (entry.materialization.path !== undefined && typeof entry.materialization.path !== "string") {
+        errors.push(`resolved.${skillId}.materialization.path must be a string`);
+      }
+      if (entry.materialization.pack !== undefined && typeof entry.materialization.pack !== "string") {
+        errors.push(`resolved.${skillId}.materialization.pack must be a string`);
+      }
+      if (entry.materialization.entry !== undefined && typeof entry.materialization.entry !== "string") {
+        errors.push(`resolved.${skillId}.materialization.entry must be a string`);
+      }
     }
   }
 

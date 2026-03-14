@@ -1,0 +1,7 @@
+schema: skill/v1
+id: demo/local-note
+name: Local Note
+version: 0.1.0
+package:
+  type: dir
+  entry: ./

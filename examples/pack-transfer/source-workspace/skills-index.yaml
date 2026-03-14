@@ -1,0 +1,14 @@
+schema: skills-index/v1
+skills:
+  - id: demo/pack-app
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/pack-app
+  - id: demo/pack-helper
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/pack-helper

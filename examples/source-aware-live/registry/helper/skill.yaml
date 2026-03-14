@@ -1,0 +1,7 @@
+schema: skill/v1
+id: demo/helper
+name: Helper Skill
+version: 1.0.0
+package:
+  type: dir
+  entry: ./

@@ -25,7 +25,7 @@ export interface InstallProjectOptions {
 
 export async function installProject(layout: ScopeLayout, options: InstallProjectOptions = {}): Promise<InstallProjectResult> {
   printInfo("Resolving dependencies...");
-  const resolution = await resolveProject(layout.rootDir, { manifest: options.manifest });
+  const resolution = await resolveProject(layout.rootDir, { manifest: options.manifest, stateDir: layout.stateDir });
   printSuccess(`Resolved ${resolution.nodes.size} skill${resolution.nodes.size === 1 ? "" : "s"}`);
 
   await resolveCleanupRoot(layout.installedRoot, {
@@ -52,6 +52,7 @@ export async function installProject(layout: ScopeLayout, options: InstallProjec
       version: node.version,
       source: node.source,
       artifact: node.artifact,
+      materialization: node.materialization,
       dependencies: node.dependencies.map((dependency) => dependency.id)
     };
     return accumulator;

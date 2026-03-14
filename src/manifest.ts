@@ -1,7 +1,8 @@
 import path from "node:path";
 import semver from "semver";
 import { CliError } from "./errors";
-import type { ManifestSkill, ManifestSource, ManifestTarget, SkillsManifest } from "./types";
+import { validatePhase1GitSourceUrl } from "./git-source";
+import type { ManifestPack, ManifestSkill, ManifestSource, ManifestTarget, SkillsManifest } from "./types";
 import { MANIFEST_FILE, exists, readDocument, writeYamlDocument } from "./utils";
 
 const SUPPORTED_RANGE_PATTERN = /^(?:\d+\.\d+\.\d+|\^\d+\.\d+\.\d+|~\d+\.\d+\.\d+)$/;
@@ -31,6 +32,9 @@ export function validateManifest(manifest: unknown): SkillsManifest {
   if (value.sources && !Array.isArray(value.sources)) {
     errors.push("sources must be an array");
   }
+  if (value.packs && !Array.isArray(value.packs)) {
+    errors.push("packs must be an array");
+  }
   if (value.targets && !Array.isArray(value.targets)) {
     errors.push("targets must be an array");
   }
@@ -51,6 +55,11 @@ export function validateManifest(manifest: unknown): SkillsManifest {
   const sourceNames = new Set<string>();
   for (const source of value.sources ?? []) {
     validateSource(source, errors, sourceNames);
+  }
+
+  const packNames = new Set<string>();
+  for (const pack of value.packs ?? []) {
+    validatePack(pack, errors, packNames);
   }
 
   for (const target of value.targets ?? []) {
@@ -95,6 +104,28 @@ function validateSource(source: Partial<ManifestSource>, errors: string[], sourc
   }
   if (!source.url || typeof source.url !== "string") {
     errors.push(`source ${source.name ?? "<unknown>"} must include url`);
+  } else if (source.type === "git") {
+    const sourceUrlError = validatePhase1GitSourceUrl(source.url);
+    if (sourceUrlError) {
+      errors.push(`source ${source.name ?? "<unknown>"} url is invalid: ${sourceUrlError}`);
+    }
+  }
+}
+
+function validatePack(pack: Partial<ManifestPack>, errors: string[], packNames: Set<string>): void {
+  if (!pack || typeof pack !== "object") {
+    errors.push("packs entries must be objects");
+    return;
+  }
+  if (!pack.name || typeof pack.name !== "string") {
+    errors.push("pack.name must be a string");
+  } else if (packNames.has(pack.name)) {
+    errors.push(`duplicate pack name ${pack.name}`);
+  } else {
+    packNames.add(pack.name);
+  }
+  if (!pack.path || typeof pack.path !== "string") {
+    errors.push(`pack ${pack.name ?? "<unknown>"} must include path`);
   }
 }
 
@@ -155,6 +186,7 @@ export function createDefaultManifest(projectName: string): SkillsManifest {
     schema: "skills/v1",
     project: { name: projectName },
     sources: [],
+    packs: [],
     skills: [],
     settings: {
       install_mode: "copy",

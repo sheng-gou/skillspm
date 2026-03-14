@@ -25,6 +25,7 @@ SkillsPM uses a `skills.yaml` file as the source of truth for a reusable skills 
 Core workflow:
 
 - install
+- pack
 - freeze
 - sync
 - import
@@ -50,6 +51,12 @@ SkillsPM turns that into a reproducible workflow centered around `skills.yaml`.
 
 ```bash
 skillspm install
+```
+
+### Export the current environment into a directory pack
+
+```bash
+skillspm pack --out ./packs/team-baseline
 ```
 
 ### Freeze the current environment into `skills.lock`
@@ -173,12 +180,19 @@ It declares:
 * which agents or targets should receive them
 * optional install and sync behavior
 
-`skillspm install` reads `skills.yaml`, resolves skills from the declared sources, and installs them into the local `.skills` workspace.
+`skillspm install` reads `skills.yaml`, resolves root skills from local paths and declared sources, can also restore exact versions from configured top-level `packs[]` (including pack-only restores with no declared source), and installs the result into the local `.skills` workspace.
 
 After that:
 
 * `skillspm freeze` writes the resolved state into `skills.lock`
 * `skillspm sync` pushes the installed environment from `.skills` to one or more agents
+
+## Runnable examples
+
+The repo includes runnable, in-repo examples:
+
+* [`examples/source-aware-live`](examples/source-aware-live/README.md): one source-backed skill plus one local path skill in the same workspace
+* [`examples/pack-transfer`](examples/pack-transfer/README.md): install from a declared source, write a directory pack, then restore from top-level `packs[]`
 
 ### Minimal example
 
@@ -226,12 +240,21 @@ settings:
 
 ### Where `skillspm install` gets skills from
 
-`skillspm install` only installs skills from sources declared in `skills.yaml`.
+`skillspm install` only installs skills from what is declared in `skills.yaml`.
 
-In the current release, the main source types are:
+In the current implementation:
 
-* local paths
-* declared local source files
+* local path skills declared with `path`
+* source-backed skills resolved from declared `sources[]`
+* exact-version restores from configured top-level `packs[]`, including pack-only restore for an exact root with no declared source
+
+In the current release, a source means an entry in `sources[]`. Supported source types today are:
+
+* `index`
+* anonymous public HTTPS `git` with a plain repo URL only
+
+A pack is a directory written by `skillspm pack --out <dir>`. It does not replace the logical source, and it is not a source type.
+If a manifest declares an exact version and a matching node exists in a configured pack, install can materialize that node from the pack instead of fetching live content from a declared source. That also enables pack-only restore for an exact root when no source is declared.
 
 This keeps installs explicit and reproducible.
 
@@ -239,7 +262,8 @@ This keeps installs explicit and reproducible.
 
 * `schema`: manifest version
 * `project`: optional project-level metadata such as an optional `project.name`
-* `sources`: optional declared sources
+* `sources`: optional declared live sources (`index` or restricted public HTTPS `git`)
+* `packs`: optional declared directory packs for exact-version restore
 * `skills`: the root skills in this environment
 * `targets`: where installed skills should be synced
 * `settings`: optional behavior such as `auto_sync`
@@ -266,7 +290,65 @@ A skill can be declared in two common ways:
 In short:
 
 * use `path` for local skills
-* use `id + version + source` for skills resolved from a declared source file
+* use `id + version + source` for skills resolved from a declared source
+* use top-level `packs[]` when you want install-time exact-version restore from a portable directory pack, including pack-only restore for exact roots
+
+### Public git repo layout
+
+Phase 1 only supports public anonymous `https://` git sources, and those sources support one fixed layout only. Only plain repo URLs are accepted: `file://`, `ssh://`, `git@host:repo`, URLs with embedded credentials, non-empty query strings, and non-empty `#` fragments are rejected. During install, `skillspm` isolates git config, disables credential prompts/helpers, and blocks `file://` transport so ambient rewrite rules such as `url.*.insteadOf` cannot bypass that policy.
+
+```text
+skills/
+└── <skill-id path>/
+    └── <version>/
+        ├── SKILL.md
+        └── skill.yaml
+```
+
+Example for `acme/code-review@1.2.0`:
+
+```text
+skills/acme/code-review/1.2.0/
+```
+
+`skill.yaml.version` must match the directory version.
+
+### Manifest example with public HTTPS git + pack restore
+
+```yaml
+schema: skills/v1
+
+sources:
+  - name: community
+    type: git
+    url: https://github.com/example/public-skills.git
+
+packs:
+  - name: baseline
+    path: ./packs/team-baseline
+
+skills:
+  - id: acme/code-review
+    version: 1.2.0
+    source: community
+
+  - id: local/release-check
+    path: ./local-skills/release-check
+```
+
+A second machine can restore from the pack by declaring the same exact version and the pack:
+
+```yaml
+schema: skills/v1
+
+packs:
+  - name: baseline
+    path: ./packs/team-baseline
+
+skills:
+  - id: acme/code-review
+    version: 1.2.0
+```
 
 ## `skills.lock`
 
@@ -280,7 +362,12 @@ then `skills.lock` records:
 
 > what was actually resolved and installed
 
-It is mainly used to lock the resolved skills versions and sources, so the same environment can be reproduced later across machines, repos, and agents.
+It is mainly used to lock the resolved skills versions and provenance, so the same environment can be reproduced later across machines, repos, and agents.
+
+Each resolved node records both:
+
+* logical source provenance (`source`) — where the skill conceptually came from
+* materialization provenance (`materialization`) — whether this install used live content or restored from a pack
 
 In most cases, you do not edit `skills.lock` by hand. It is produced by `skillspm install` / `skillspm freeze`.
 
@@ -376,8 +463,9 @@ Recommended usage:
 
 | Command                              | Description                                              |
 | ------------------------------------ | -------------------------------------------------------- |
-| `skillspm install [-g]`                | Resolve and install the skills declared in `skills.yaml` |
+| `skillspm install [-g]`                | Resolve skills from local paths, declared sources, and configured exact-version pack restores |
 | `skillspm update [skill] [-g]`         | Refresh root skill versions from configured sources or pin one skill |
+| `skillspm pack --out <dir> [-g]`       | Write the installed exact skills into a portable directory pack |
 | `skillspm freeze [-g]`                 | Write the current installation state into `skills.lock`  |
 | `skillspm sync [target] [-g]`          | Sync installed skills to one or more targets             |
 | `skillspm import [--from <source>] [-g]` | Import skills from an agent or local path              |
@@ -388,14 +476,14 @@ Recommended usage:
 | Command                                  | Description                                                  |
 | ---------------------------------------- | ------------------------------------------------------------ |
 | `skillspm snapshot [--json] [-g]`          | Export the current skills environment                        |
-| `skillspm doctor [--json] [-g]`            | Diagnose environment health                                  |
+| `skillspm doctor [--json] [-g]`            | Validate manifest, lockfile, installed skills, and targets   |
 | `skillspm init [-g]`                       | Create a starter `skills.yaml` for a project or global scope |
 | `skillspm add <skill> [-g]`                | Add a root skill entry to `skills.yaml`                      |
 | `skillspm remove <skill> [-g]`             | Remove a root skill entry from `skills.yaml`                 |
 | `skillspm list [--resolved] [--json] [-g]` | Show skills in the current scope                             |
 | `skillspm why <skill> [-g]`                | Explain why a skill is installed                             |
 | `skillspm target add <target> [-g]`        | Add a target agent to the current scope                      |
-| `skillspm bootstrap [-g]`                  | Shortcut for `install + doctor (+ sync if enabled)`          |
+| `skillspm bootstrap [-g]`                  | Shortcut for `install + auto-sync if enabled + doctor`       |
 
 `skillspm import` scans the current working tree and the default OpenClaw skills directory by default. Use `--from openclaw`, `--from codex`, `--from claude_code`, or `--from <path>` to import from one explicit source.
 
@@ -430,6 +518,10 @@ What works today:
 
 * project scope and global scope
 * manifest + lockfile workflow
+* local path skills
+* index source install
+* restricted public HTTPS git source install
+* directory pack export and exact-version restore via top-level `packs[]`
 * import from OpenClaw / Codex / Claude Code / local path
 * sync to OpenClaw / Codex / Claude Code / generic target
 * inspect and generate minimal `skill.yaml`
@@ -440,8 +532,8 @@ What works today:
 
 Not implemented yet or still limited:
 
-* git source install
-* remote registry / auth / download flows
+* private/authenticated git or other non-plain-HTTPS git source flows
+* remote registry / auth / download flows beyond declared local index paths and restricted public HTTPS git
 * automatic dependency inference for new skills
 * deeper host compatibility rules
 

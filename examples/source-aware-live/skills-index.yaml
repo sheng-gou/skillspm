@@ -1,0 +1,14 @@
+schema: skills-index/v1
+skills:
+  - id: demo/live-app
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/live-app
+  - id: demo/helper
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/helper

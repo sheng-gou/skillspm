@@ -54,6 +54,7 @@ When contributing, please keep these principles in mind:
 - `skills.lock` represents the frozen installed state
 - core user workflow should stay easy to understand:
   - `install`
+  - `pack`
   - `freeze`
   - `sync`
   - `import`

@@ -1,0 +1,13 @@
+schema: skills/v1
+project:
+  name: pack-transfer-restore
+packs:
+  - name: baseline
+    path: ./packs/team-baseline
+skills:
+  - id: demo/pack-app
+    version: 1.0.0
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false

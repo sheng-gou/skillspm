@@ -1,0 +1,7 @@
+schema: skill/v1
+id: demo/pack-helper
+name: Pack Helper
+version: 1.0.0
+package:
+  type: dir
+  entry: ./

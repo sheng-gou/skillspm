@@ -1,0 +1,17 @@
+schema: skills/v1
+project:
+  name: source-aware-live
+sources:
+  - name: fixtures
+    type: index
+    url: ./skills-index.yaml
+skills:
+  - id: demo/live-app
+    version: ^1.0.0
+    source: fixtures
+  - id: demo/local-note
+    path: ./local-skills/local-note
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false

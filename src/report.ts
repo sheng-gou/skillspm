@@ -140,6 +140,7 @@ export async function freezeInstalledState(layout: ScopeLayout): Promise<SkillsL
       version,
       source: existing?.node.source ?? { type: "path", url: installPath },
       artifact: existing?.node.artifact ?? { type: "path", url: installPath },
+      materialization: existing?.node.materialization ?? { type: "live", path: installPath },
       dependencies: metadata?.dependencies?.map((dependency) => dependency.id) ?? existing?.node.dependencies ?? []
     };
   }
@@ -256,7 +257,7 @@ async function buildResolvedSkillRecords(
     return { skills: [], source: options.preferLive ? "live" : "none" };
   }
 
-  const resolution = await resolveProject(layout.rootDir);
+  const resolution = await resolveProject(layout.rootDir, { stateDir: layout.stateDir });
   const skills: ResolvedSkillRecord[] = [];
   for (const node of [...resolution.nodes.values()].sort((left, right) => left.id.localeCompare(right.id))) {
     const installEntry = buildInstalledEntryName(node.id, node.version);
@@ -265,7 +266,7 @@ async function buildResolvedSkillRecords(
       version: node.version,
       version_range: null,
       source: node.source?.name ?? node.source?.type ?? null,
-      path: node.source?.type === "path" ? node.source.url ?? node.installPath : node.artifact?.url ?? null,
+      path: selectResolvedNodePath(node.source, node.artifact?.url ?? node.installPath, node.materialization),
       install_entry: installEntry,
       status: {
         declared: resolution.manifest.skills.some((skill) => skill.id === node.id),
@@ -292,7 +293,7 @@ async function buildResolvedSkillRecordsFromLock(
       version: node.version,
       version_range: null,
       source: node.source?.name ?? node.source?.type ?? null,
-      path: node.source?.type === "path" ? node.source.url ?? node.artifact?.url ?? null : node.artifact?.url ?? null,
+      path: selectResolvedNodePath(node.source, node.artifact?.url ?? null, node.materialization),
       install_entry: installEntry,
       status: {
         declared: manifest.skills.some((skill) => skill.id === skillId),
@@ -304,6 +305,20 @@ async function buildResolvedSkillRecordsFromLock(
     });
   }
   return skills;
+}
+
+function selectResolvedNodePath(
+  source: SkillsLock["resolved"][string]["source"] | undefined,
+  artifactPath: string | null,
+  materialization: SkillsLock["resolved"][string]["materialization"] | undefined
+): string | null {
+  if (materialization?.type === "pack") {
+    return artifactPath;
+  }
+  if (source?.type === "path") {
+    return source.url ?? artifactPath;
+  }
+  return artifactPath;
 }
 
 function buildTargetRecords(layout: ScopeLayout, manifest: SkillsManifest, lockfile?: SkillsLock): SnapshotTargetRecord[] {

@@ -6,8 +6,25 @@ CLI="node ${ROOT_DIR}/dist/cli.js"
 TMP_DIR="$(mktemp -d)"
 WORK_DIR="${TMP_DIR}/workspace"
 HOME_DIR="${TMP_DIR}/home"
+EXAMPLE_SOURCE_AWARE_DIR="${ROOT_DIR}/examples/source-aware-live"
+EXAMPLE_PACK_SOURCE_DIR="${ROOT_DIR}/examples/pack-transfer/source-workspace"
+EXAMPLE_PACK_RESTORE_DIR="${ROOT_DIR}/examples/pack-transfer/restore-workspace"
 
 export HOME="${HOME_DIR}"
+
+cleanup_examples() {
+  rm -rf \
+    "${EXAMPLE_SOURCE_AWARE_DIR}/.skills" \
+    "${EXAMPLE_SOURCE_AWARE_DIR}/skills.lock" \
+    "${EXAMPLE_PACK_SOURCE_DIR}/.skills" \
+    "${EXAMPLE_PACK_SOURCE_DIR}/skills.lock" \
+    "${EXAMPLE_PACK_SOURCE_DIR}/packs" \
+    "${EXAMPLE_PACK_RESTORE_DIR}/.skills" \
+    "${EXAMPLE_PACK_RESTORE_DIR}/skills.lock" \
+    "${EXAMPLE_PACK_RESTORE_DIR}/packs"
+}
+
+trap cleanup_examples EXIT
 
 mkdir -p "${WORK_DIR}"
 cd "${WORK_DIR}"
@@ -15,6 +32,23 @@ cd "${WORK_DIR}"
 ${CLI} init >/tmp/skills-init.log
 ${CLI} --help >/tmp/skills-help.log
 grep -q "Usage: skillspm <command> \\[options\\]" /tmp/skills-help.log
+grep -q "install           Resolve skills from local paths, declared sources, and configured exact-version pack restores" /tmp/skills-help.log
+grep -q "pack              Write the installed exact skills into a portable directory pack" /tmp/skills-help.log
+grep -q "doctor            Validate manifest, lockfile, installed skills, and targets" /tmp/skills-help.log
+grep -q "bootstrap         Run install, auto-sync when enabled, then doctor" /tmp/skills-help.log
+
+${CLI} install --help >/tmp/skills-help-install.log
+grep -q "Resolve skills from local paths, declared sources, and configured exact-version pack restores" /tmp/skills-help-install.log
+
+${CLI} pack --help >/tmp/skills-help-pack.log
+grep -q "Write the installed exact skills into a portable directory pack" /tmp/skills-help-pack.log
+grep -q "Write the directory pack to this path" /tmp/skills-help-pack.log
+
+${CLI} doctor --help >/tmp/skills-help-doctor.log
+grep -q "Validate manifest, lockfile, installed skills, and targets" /tmp/skills-help-doctor.log
+
+${CLI} bootstrap --help >/tmp/skills-help-bootstrap.log
+grep -q "Run install, auto-sync when enabled, then doctor" /tmp/skills-help-bootstrap.log
 
 ${CLI} add acme/plain >/tmp/skills-add-null.log
 grep -q "acme/plain" skills.yaml
@@ -602,23 +636,67 @@ test -d .skills/installed/local__auto-sync-check@0.7.0
 test -d ./synced-target/local__auto-sync-check@0.7.0
 grep -q "generic synced (copy)" /tmp/skills-auto-sync-install.log
 
-GIT_SOURCE_DIR="${TMP_DIR}/git-source-workspace"
-mkdir -p "${GIT_SOURCE_DIR}"
-cd "${GIT_SOURCE_DIR}"
+INVALID_GIT_SOURCE_DIR="${TMP_DIR}/git-source-validation-workspace"
+mkdir -p "${INVALID_GIT_SOURCE_DIR}"
+cd "${INVALID_GIT_SOURCE_DIR}"
+${CLI} init >/tmp/skills-git-url-init.log
 
-${CLI} init >/tmp/skills-git-init.log
+check_invalid_git_source_url() {
+  local case_name="$1"
+  local url="$2"
+  local expected_detail="$3"
+
+  cat > skills.yaml <<EOF
+schema: skills/v1
+project:
+  name: git-source-validation
+sources:
+  - name: upstream
+    type: git
+    url: "${url}"
+skills:
+  - id: acme/git-app
+    version: 1.1.0
+    source: upstream
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+  set +e
+  ${CLI} install >"/tmp/skills-git-url-${case_name}.log" 2>&1
+  local exit_code=$?
+  set -e
+
+  test "${exit_code}" -eq 2
+  grep -q "Phase 1 only supports public anonymous HTTPS git sources" "/tmp/skills-git-url-${case_name}.log"
+  grep -q "${expected_detail}" "/tmp/skills-git-url-${case_name}.log"
+}
+
+check_invalid_git_source_url "file" "file://${TMP_DIR}/git-source-repo.git" "file:// URLs are not allowed"
+check_invalid_git_source_url "ssh" "ssh://github.com/example/public-skills.git" "ssh:// URLs are not allowed"
+check_invalid_git_source_url "scp" "git@github.com:example/public-skills.git" "SCP-like git@host:repo URLs are not allowed"
+check_invalid_git_source_url "credentials" "https://token@github.com/example/public-skills.git" "embedded credentials are not allowed"
+check_invalid_git_source_url "query" "https://github.com/example/public-skills.git?ref=main" "Query strings are not allowed in Phase 1"
+check_invalid_git_source_url "fragment" "https://github.com/example/public-skills.git#main" "URL fragments are not allowed in Phase 1"
+
+HTTPS_GIT_SOURCE_DIR="${TMP_DIR}/git-source-https-workspace"
+mkdir -p "${HTTPS_GIT_SOURCE_DIR}"
+cd "${HTTPS_GIT_SOURCE_DIR}"
+${CLI} init >/tmp/skills-git-https-init.log
 
 cat > skills.yaml <<'EOF'
 schema: skills/v1
 project:
-  name: git-source
+  name: git-source-https
 sources:
   - name: upstream
     type: git
-    url: https://example.com/acme/skills.git
+    url: https://127.0.0.1/example/public-skills.git
 skills:
-  - id: acme/git-skill
-    version: ^1.0.0
+  - id: acme/git-app
+    version: 1.1.0
     source: upstream
 settings:
   install_mode: copy
@@ -627,11 +705,284 @@ settings:
 EOF
 
 set +e
-${CLI} install >/tmp/skills-git-install.log 2>&1
-GIT_SOURCE_EXIT=$?
+${CLI} install >/tmp/skills-git-https-install.log 2>&1
+HTTPS_EXIT=$?
 set -e
-test "${GIT_SOURCE_EXIT}" -eq 3
-grep -q "schema is accepted, but git source install is not implemented yet" /tmp/skills-git-install.log
+test "${HTTPS_EXIT}" -eq 4
+grep -q "Unable to clone git source upstream from https://127.0.0.1/example/public-skills.git" /tmp/skills-git-https-install.log
+if grep -q "Phase 1 only supports public anonymous HTTPS git sources" /tmp/skills-git-https-install.log; then
+  echo "unexpected Phase 1 git URL rejection for anonymous https:// source" >&2
+  exit 1
+fi
+
+GIT_REWRITE_SOURCE_DIR="${TMP_DIR}/git-rewrite-source"
+GIT_REWRITE_BARE_REPO="${TMP_DIR}/git-rewrite-source.git"
+GIT_REWRITE_CONTROL_CLONE_DIR="${TMP_DIR}/git-rewrite-control-clone"
+mkdir -p "${GIT_REWRITE_SOURCE_DIR}/skills/acme/git-app/1.1.0"
+
+cat > "${GIT_REWRITE_SOURCE_DIR}/skills/acme/git-app/1.1.0/SKILL.md" <<'EOF'
+# git app
+EOF
+
+cat > "${GIT_REWRITE_SOURCE_DIR}/skills/acme/git-app/1.1.0/skill.yaml" <<'EOF'
+schema: skill/v1
+id: acme/git-app
+name: Git App
+version: 1.1.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+git -C "${GIT_REWRITE_SOURCE_DIR}" init >/tmp/skills-git-rewrite-init.log 2>&1
+git -C "${GIT_REWRITE_SOURCE_DIR}" config user.name "Smoke Test"
+git -C "${GIT_REWRITE_SOURCE_DIR}" config user.email "smoke@example.com"
+git -C "${GIT_REWRITE_SOURCE_DIR}" add skills
+git -C "${GIT_REWRITE_SOURCE_DIR}" commit -m "seed git source" >/tmp/skills-git-rewrite-commit.log 2>&1
+git clone --bare "${GIT_REWRITE_SOURCE_DIR}" "${GIT_REWRITE_BARE_REPO}" >/tmp/skills-git-rewrite-bare.log 2>&1
+
+cat > "${HOME}/.gitconfig" <<EOF
+[url "file://${GIT_REWRITE_BARE_REPO}"]
+  insteadOf = https://rewrite.example/acme/public-skills.git
+EOF
+
+rm -rf "${GIT_REWRITE_CONTROL_CLONE_DIR}"
+git clone --depth 1 --no-tags https://rewrite.example/acme/public-skills.git "${GIT_REWRITE_CONTROL_CLONE_DIR}" \
+  >/tmp/skills-git-rewrite-control.log 2>&1
+test -f "${GIT_REWRITE_CONTROL_CLONE_DIR}/skills/acme/git-app/1.1.0/SKILL.md"
+
+GIT_REWRITE_WORKSPACE_DIR="${TMP_DIR}/git-rewrite-workspace"
+mkdir -p "${GIT_REWRITE_WORKSPACE_DIR}"
+cd "${GIT_REWRITE_WORKSPACE_DIR}"
+${CLI} init >/tmp/skills-git-rewrite-workspace-init.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: git-rewrite
+sources:
+  - name: upstream
+    type: git
+    url: https://rewrite.example/acme/public-skills.git
+skills:
+  - id: acme/git-app
+    version: 1.1.0
+    source: upstream
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+set +e
+${CLI} install >/tmp/skills-git-rewrite-install.log 2>&1
+GIT_REWRITE_EXIT=$?
+set -e
+test "${GIT_REWRITE_EXIT}" -eq 4
+grep -q "Unable to clone git source upstream from https://rewrite.example/acme/public-skills.git" \
+  /tmp/skills-git-rewrite-install.log
+! test -d .skills/installed/acme__git-app@1.1.0
+
+LOCAL_PACK_SOURCE_DIR="${TMP_DIR}/pack-source-workspace"
+LOCAL_PACK_RESTORE_DIR="${TMP_DIR}/pack-restore-workspace"
+mkdir -p "${LOCAL_PACK_SOURCE_DIR}/local-skills/packed-dep" "${LOCAL_PACK_SOURCE_DIR}/local-skills/packed-app" "${LOCAL_PACK_RESTORE_DIR}"
+
+cat > "${LOCAL_PACK_SOURCE_DIR}/local-skills/packed-dep/SKILL.md" <<'EOF'
+# packed dep
+EOF
+
+cat > "${LOCAL_PACK_SOURCE_DIR}/local-skills/packed-dep/skill.yaml" <<'EOF'
+schema: skill/v1
+id: local/packed-dep
+name: Packed Dependency
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > "${LOCAL_PACK_SOURCE_DIR}/local-skills/packed-app/SKILL.md" <<'EOF'
+# packed app
+EOF
+
+cat > "${LOCAL_PACK_SOURCE_DIR}/local-skills/packed-app/skill.yaml" <<'EOF'
+schema: skill/v1
+id: local/packed-app
+name: Packed App
+version: 1.1.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cd "${LOCAL_PACK_SOURCE_DIR}"
+${CLI} init >/tmp/skills-pack-source-init.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: pack-source
+skills:
+  - id: local/packed-app
+    path: ./local-skills/packed-app
+  - id: local/packed-dep
+    path: ./local-skills/packed-dep
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-pack-source-install.log
+test -d .skills/installed/local__packed-app@1.1.0
+test -d .skills/installed/local__packed-dep@1.0.0
+grep -q 'materialization:' skills.lock
+grep -q 'type: live' skills.lock
+
+${CLI} pack --out ./packs/phase1 >/tmp/skills-pack.log
+test -f ./packs/phase1/pack.yaml
+test -d ./packs/phase1/skills/local__packed-app@1.1.0
+test -d ./packs/phase1/skills/local__packed-dep@1.0.0
+grep -q 'schema: skills-pack/v1' ./packs/phase1/pack.yaml
+grep -q 'local/packed-app:' ./packs/phase1/pack.yaml
+grep -q 'local/packed-dep:' ./packs/phase1/pack.yaml
+
+cd "${LOCAL_PACK_RESTORE_DIR}"
+${CLI} init >/tmp/skills-pack-restore-init.log
+mkdir -p imported-pack
+cp -R "${LOCAL_PACK_SOURCE_DIR}/packs/phase1/." imported-pack/
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: pack-restore
+packs:
+  - name: phase1
+    path: ./imported-pack
+skills:
+  - id: local/packed-app
+    version: 1.1.0
+  - id: local/packed-dep
+    version: 1.0.0
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-pack-restore-install.log
+test -d .skills/installed/local__packed-app@1.1.0
+test -d .skills/installed/local__packed-dep@1.0.0
+grep -q 'pack: phase1' skills.lock
+grep -q 'entry: skills/local__packed-app@1.1.0' skills.lock
+grep -q 'entry: skills/local__packed-dep@1.0.0' skills.lock
+grep -q 'type: pack' skills.lock
+${CLI} list --resolved --json >/tmp/skills-pack-list-resolved.json
+grep -q '"id": "local/packed-app"' /tmp/skills-pack-list-resolved.json
+grep -q '"path": ".*imported-pack/skills/local__packed-app@1.1.0"' /tmp/skills-pack-list-resolved.json
+
+PACK_SHADOW_PACK_SOURCE_DIR="${TMP_DIR}/pack-shadow-pack-source"
+PACK_SHADOW_RESTORE_DIR="${TMP_DIR}/pack-shadow-restore-workspace"
+mkdir -p "${PACK_SHADOW_PACK_SOURCE_DIR}/local-skills/shadowed" "${PACK_SHADOW_RESTORE_DIR}/registry/shadowed"
+
+cat > "${PACK_SHADOW_PACK_SOURCE_DIR}/local-skills/shadowed/SKILL.md" <<'EOF'
+# packed mismatch
+EOF
+
+cat > "${PACK_SHADOW_PACK_SOURCE_DIR}/local-skills/shadowed/skill.yaml" <<'EOF'
+schema: skill/v1
+id: acme/shadowed
+name: Shadowed Packed Skill
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cd "${PACK_SHADOW_PACK_SOURCE_DIR}"
+${CLI} init >/tmp/skills-pack-shadow-pack-init.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: pack-shadow-pack
+skills:
+  - id: acme/shadowed
+    path: ./local-skills/shadowed
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-pack-shadow-pack-install.log
+${CLI} pack --out ./packs/shadow >/tmp/skills-pack-shadow-pack.log
+test -f ./packs/shadow/pack.yaml
+
+cat > "${PACK_SHADOW_RESTORE_DIR}/registry/shadowed/SKILL.md" <<'EOF'
+# live manifest aligned
+EOF
+
+cat > "${PACK_SHADOW_RESTORE_DIR}/registry/shadowed/skill.yaml" <<'EOF'
+schema: skill/v1
+id: acme/shadowed
+name: Shadowed Live Skill
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > "${PACK_SHADOW_RESTORE_DIR}/index.yaml" <<'EOF'
+schema: skills-index/v1
+skills:
+  - id: acme/shadowed
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/shadowed
+EOF
+
+cd "${PACK_SHADOW_RESTORE_DIR}"
+${CLI} init >/tmp/skills-pack-shadow-restore-init.log
+mkdir -p imported-pack
+cp -R "${PACK_SHADOW_PACK_SOURCE_DIR}/packs/shadow/." imported-pack/
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: pack-shadow-restore
+sources:
+  - name: upstream
+    type: index
+    url: ./index.yaml
+packs:
+  - name: shadow-pack
+    path: ./imported-pack
+skills:
+  - id: acme/shadowed
+    version: 1.0.0
+    source: upstream
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false
+EOF
+
+${CLI} install >/tmp/skills-pack-shadow-restore-install.log
+test -d .skills/installed/acme__shadowed@1.0.0
+grep -q '# live manifest aligned' .skills/installed/acme__shadowed@1.0.0/SKILL.md
+! grep -q '# packed mismatch' .skills/installed/acme__shadowed@1.0.0/SKILL.md
+grep -q 'name: upstream' skills.lock
+grep -q 'type: index' skills.lock
+grep -q 'url: ./index.yaml' skills.lock
+grep -q 'type: live' skills.lock
+! grep -q 'pack: shadow-pack' skills.lock
+${CLI} list --resolved --json >/tmp/skills-pack-shadow-list-resolved.json
+grep -q '"id": "acme/shadowed"' /tmp/skills-pack-shadow-list-resolved.json
+grep -q '"path": ".*registry/shadowed"' /tmp/skills-pack-shadow-list-resolved.json
+! grep -q 'imported-pack/skills/acme__shadowed@1.0.0' /tmp/skills-pack-shadow-list-resolved.json
 
 MARKER_DIR="${TMP_DIR}/marker-workspace"
 mkdir -p "${MARKER_DIR}/local-skills/no-marker"
@@ -1787,5 +2138,41 @@ EOF
   test -f skills.lock
   test -d .skills/installed/local__packed-check@0.8.0
 fi
+
+cleanup_examples
+
+cd "${EXAMPLE_SOURCE_AWARE_DIR}"
+${CLI} install >/tmp/example-source-aware-install.log
+${CLI} list --resolved >/tmp/example-source-aware-list.log
+${CLI} doctor --json >/tmp/example-source-aware-doctor.json
+test -d .skills/installed/demo__live-app@1.0.0
+test -d .skills/installed/demo__helper@1.0.0
+test -d .skills/installed/demo__local-note@0.1.0
+grep -q "demo/live-app 1.0.0" /tmp/example-source-aware-list.log
+grep -q "demo/local-note 0.1.0" /tmp/example-source-aware-list.log
+grep -q '"result": "healthy"' /tmp/example-source-aware-doctor.json
+grep -q 'type: index' skills.lock
+grep -q 'type: path' skills.lock
+
+cd "${EXAMPLE_PACK_SOURCE_DIR}"
+${CLI} install >/tmp/example-pack-source-install.log
+${CLI} pack --out ./packs/team-baseline >/tmp/example-pack-source-pack.log
+test -f ./packs/team-baseline/pack.yaml
+test -d ./packs/team-baseline/skills/demo__pack-app@1.0.0
+test -d ./packs/team-baseline/skills/demo__pack-helper@1.0.0
+
+cd "${EXAMPLE_PACK_RESTORE_DIR}"
+mkdir -p ./packs
+cp -R ../source-workspace/packs/team-baseline ./packs/team-baseline
+${CLI} install >/tmp/example-pack-restore-install.log
+${CLI} list --resolved >/tmp/example-pack-restore-list.log
+${CLI} doctor --json >/tmp/example-pack-restore-doctor.json
+test -d .skills/installed/demo__pack-app@1.0.0
+test -d .skills/installed/demo__pack-helper@1.0.0
+grep -q "demo/pack-helper 1.0.0" /tmp/example-pack-restore-list.log
+grep -q '"result": "healthy"' /tmp/example-pack-restore-doctor.json
+grep -q 'type: pack' skills.lock
+grep -q 'pack: baseline' skills.lock
+grep -q 'name: fixtures' skills.lock
 
 echo "smoke ok"

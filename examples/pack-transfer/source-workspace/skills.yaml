@@ -1,0 +1,15 @@
+schema: skills/v1
+project:
+  name: pack-transfer-source
+sources:
+  - name: fixtures
+    type: index
+    url: ./skills-index.yaml
+skills:
+  - id: demo/pack-app
+    version: 1.0.0
+    source: fixtures
+settings:
+  install_mode: copy
+  auto_sync: false
+  strict: false

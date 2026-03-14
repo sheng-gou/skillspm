@@ -12,6 +12,7 @@ import { buildInspectReport, renderInspectText } from "./inspect-report";
 import { importSkills } from "./importer";
 import { installProject } from "./installer";
 import { createDefaultManifest, loadManifest, saveManifest } from "./manifest";
+import { packProject } from "./packer";
 import { buildListReport, buildSnapshotReport, freezeInstalledState, renderSnapshotText } from "./report";
 import { resolveProject } from "./resolver";
 import { formatScopeLabel, resolveScopeLayout, resolveStateContainmentRoot } from "./scope";
@@ -114,7 +115,7 @@ export async function runCli(argv: string[]): Promise<number> {
   withScopeOption(
     program
       .command("install")
-      .description("Resolve and install skills into the selected scope")
+      .description("Resolve skills from local paths, declared sources, and configured exact-version pack restores")
   ).action(async (options: { global?: boolean }) => {
     await runInstallCommand(resolveScopeLayout(process.cwd(), options.global));
   });
@@ -140,7 +141,7 @@ export async function runCli(argv: string[]): Promise<number> {
   withScopeOption(
     program
       .command("bootstrap")
-      .description("Install, optionally auto-sync, then run doctor")
+      .description("Run install, auto-sync when enabled, then doctor")
   ).action(async (options: { global?: boolean }) => {
     const layout = resolveScopeLayout(process.cwd(), options.global);
     await runInstallCommand(layout);
@@ -162,6 +163,21 @@ export async function runCli(argv: string[]): Promise<number> {
 
   withScopeOption(
     program
+      .command("pack")
+      .description("Write the installed exact skills into a portable directory pack")
+      .option("--out <dir>", "Write the directory pack to this path")
+  ).action(async (options: { out?: string; global?: boolean }) => {
+    if (!options.out) {
+      throw new CliError("pack requires --out <dir>", 2);
+    }
+    const layout = resolveScopeLayout(process.cwd(), options.global);
+    const outDir = await normalizePackOutputPath(process.cwd(), layout, options.out);
+    const result = await packProject(layout, outDir);
+    printSuccess(`Wrote pack to ${result.outDir} (${Object.keys(result.pack.resolved).length} skill${Object.keys(result.pack.resolved).length === 1 ? "" : "s"})`);
+  });
+
+  withScopeOption(
+    program
       .command("import")
       .description("Discover existing skills and merge them into skills.yaml")
       .option("--from <source>", "Scan openclaw, codex, claude_code, or a local path")
@@ -175,7 +191,7 @@ export async function runCli(argv: string[]): Promise<number> {
   withScopeOption(
     program
       .command("doctor")
-      .description("Check skills health")
+      .description("Validate manifest, lockfile, installed skills, and targets")
       .option("--json", "Emit a machine-readable report")
   ).action(async (options: { json?: boolean; global?: boolean }) => {
     const layout = resolveScopeLayout(process.cwd(), options.global);
@@ -238,7 +254,7 @@ export async function runCli(argv: string[]): Promise<number> {
       return;
     }
 
-    const resolution = await resolveProject(layout.rootDir);
+    const resolution = await resolveProject(layout.rootDir, { stateDir: layout.stateDir });
     if (!resolution.nodes.has(skillId)) {
       throw new CliError(`${skillId} is not part of this ${layout.scope} scope`, 1);
     }
@@ -457,6 +473,12 @@ async function normalizeTargetPath(commandCwd: string, layout: ScopeLayout, inpu
   const absolutePath = resolveFileUrlOrPath(commandCwd, input);
   await assertConfiguredPathWithinRootReal(layout.rootDir, input, absolutePath, `target path ${input}`);
   return normalizeRelativePath(layout.rootDir, absolutePath);
+}
+
+async function normalizePackOutputPath(commandCwd: string, layout: ScopeLayout, input: string): Promise<string> {
+  const absolutePath = resolveFileUrlOrPath(commandCwd, input);
+  await assertConfiguredPathWithinRootReal(layout.rootDir, input, absolutePath, `pack output path ${input}`);
+  return absolutePath;
 }
 
 async function runInstallCommand(layout: ScopeLayout): Promise<void> {
@@ -834,7 +856,7 @@ function renderHelp(commandName?: string): string {
     return [
       "Usage: skillspm install [options]",
       "",
-      "Resolve and install skills into the selected scope",
+      "Resolve skills from local paths, declared sources, and configured exact-version pack restores",
       "",
       "Options:",
       "  -g, --global      Use ~/.skills instead of the current project"
@@ -855,7 +877,7 @@ function renderHelp(commandName?: string): string {
     return [
       "Usage: skillspm bootstrap [options]",
       "",
-      "Install, optionally auto-sync, then run doctor",
+      "Run install, auto-sync when enabled, then doctor",
       "",
       "Options:",
       "  -g, --global      Use ~/.skills instead of the current project"
@@ -868,6 +890,17 @@ function renderHelp(commandName?: string): string {
       "Rewrite skills.lock from the currently installed state",
       "",
       "Options:",
+      "  -g, --global      Use ~/.skills instead of the current project"
+    ].join("\n");
+  }
+  if (commandName === "pack") {
+    return [
+      "Usage: skillspm pack --out <dir> [options]",
+      "",
+      "Write the installed exact skills into a portable directory pack",
+      "",
+      "Options:",
+      "  --out <dir>       Write the directory pack to this path",
       "  -g, --global      Use ~/.skills instead of the current project"
     ].join("\n");
   }
@@ -886,7 +919,7 @@ function renderHelp(commandName?: string): string {
     return [
       "Usage: skillspm doctor [options]",
       "",
-      "Check skills health",
+      "Validate manifest, lockfile, installed skills, and targets",
       "",
       "Options:",
       "  --json            Emit a machine-readable report",
@@ -973,14 +1006,15 @@ function renderHelp(commandName?: string): string {
     "Default scope: project (use -g/--global for ~/.skills)",
     "",
     "Core workflow:",
-    "  install           Resolve and install skills into the selected scope",
+    "  install           Resolve skills from local paths, declared sources, and configured exact-version pack restores",
+    "  pack              Write the installed exact skills into a portable directory pack",
     "  freeze            Rewrite skills.lock from the installed state",
     "  sync              Sync installed skills to target directories",
     "  import            Discover existing skills and merge them into skills.yaml",
     "  inspect           Inspect a local skill directory and generate minimal metadata",
     "",
     "Inspection and diagnostics:",
-    "  doctor            Check skills health",
+    "  doctor            Validate manifest, lockfile, installed skills, and targets",
     "  list              List root or resolved skills",
     "  snapshot          Summarize the selected skills environment",
     "  why               Explain why a skill is installed",
@@ -993,7 +1027,7 @@ function renderHelp(commandName?: string): string {
     "",
     "Other commands:",
     "  update            Refresh installed skills from the current manifest",
-    "  bootstrap         Install, optionally auto-sync, then run doctor",
+    "  bootstrap         Run install, auto-sync when enabled, then doctor",
     "",
     "Run `skillspm <command> --help` for command-specific usage."
   ].join("\n");

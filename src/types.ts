@@ -6,6 +6,11 @@ export interface ManifestSource {
   url: string;
 }
 
+export interface ManifestPack {
+  name: string;
+  path: string;
+}
+
 export interface ManifestSkill {
   id: string;
   version?: string;
@@ -34,6 +39,7 @@ export interface SkillsManifest {
     name?: string;
   };
   sources?: ManifestSource[];
+  packs?: ManifestPack[];
   skills: ManifestSkill[];
   targets?: ManifestTarget[];
   settings?: ManifestSettings;
@@ -93,10 +99,17 @@ export interface LockResolvedNode {
     type: "index" | "git" | "path";
     name?: string;
     url?: string;
+    revision?: string;
   };
   artifact?: {
     type: "path";
     url?: string;
+  };
+  materialization?: {
+    type: "live" | "pack";
+    path?: string;
+    pack?: string;
+    entry?: string;
   };
   dependencies?: string[];
 }
@@ -130,6 +143,7 @@ export interface ResolvedSkillNode {
   metadata?: SkillMetadata;
   source?: LockResolvedNode["source"];
   artifact?: LockResolvedNode["artifact"];
+  materialization?: LockResolvedNode["materialization"];
   root: boolean;
 }
 
@@ -137,4 +151,10 @@ export interface ResolutionResult {
   manifest: SkillsManifest;
   nodes: Map<string, ResolvedSkillNode>;
   rootSkillIds: string[];
+}
+
+export interface SkillsPack {
+  schema: "skills-pack/v1";
+  generated_at: string;
+  resolved: Record<string, LockResolvedNode>;
 }

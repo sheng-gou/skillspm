@@ -1,0 +1,10 @@
+schema: skill/v1
+id: demo/live-app
+name: Live App
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+dependencies:
+  - id: demo/helper
+    version: ^1.0.0

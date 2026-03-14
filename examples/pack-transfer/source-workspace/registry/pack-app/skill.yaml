@@ -1,0 +1,10 @@
+schema: skill/v1
+id: demo/pack-app
+name: Pack App
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+dependencies:
+  - id: demo/pack-helper
+    version: ^1.0.0
