@@ -3,6 +3,7 @@
 Status: draft for `skillspm 0.3.0`
 
 This document defines the persisted `skills.yaml` boundary for source-backed roots in v0.3.0.
+It describes the stored low-level model, not a separate product taxonomy: high-level semantics such as local roots, public repo roots, and provider-backed repo roots intentionally compile down to `skills[].path`, `sources[].type: index|git`, optional `sources[].provider.kind` / `skills[].provider_ref`, with packs kept separate as a materialization boundary.
 
 ## Goals
 
@@ -63,7 +64,7 @@ No new top-level source type is introduced for providers.
 
 Rules:
 
-* `url` must be a public anonymous HTTPS git URL
+* `url` must be a public anonymous HTTPS git repo URL, not arbitrary git transport
 * no `file://`, `ssh://`, `git@host:repo`, embedded credentials, query strings, or fragments
 * resolver behavior is strict only: `skills/<skill-id path>/<version>/...`
 * plain git sources must not imply repo-wide loose scanning
@@ -82,6 +83,7 @@ Rules:
 
 * provider-backed sources still persist as `type: git`
 * `provider.kind` is optional and only valid on `type: git`
+* the underlying repo URL is still restricted to the same public anonymous HTTPS git form
 * allowed values in v0.3.0:
   * `skills.sh`
   * `clawhub`

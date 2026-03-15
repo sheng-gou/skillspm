@@ -768,6 +768,27 @@ test "${BAD_VERSION_EXIT}" -ne 0
 grep -q 'resolved.acme/app.version must be an exact semver or "unversioned"' /tmp/skills-bad-version-doctor.log
 
 cat > skills.lock <<'EOF'
+schema: skills-lock/v1
+resolved:
+  acme/app:
+    version: 1.0.0
+    source:
+      type: index
+      name: local
+      url: ./index.yaml
+      provider:
+        kind: skills.sh
+generated_at: 2026-03-11T00:00:00.000Z
+EOF
+
+set +e
+${CLI} list --resolved >/tmp/skills-bad-lock-provider.log 2>&1
+BAD_LOCK_PROVIDER_EXIT=$?
+set -e
+test "${BAD_LOCK_PROVIDER_EXIT}" -eq 2
+grep -q 'resolved.acme/app.source.provider is only supported for git sources' /tmp/skills-bad-lock-provider.log
+
+cat > skills.lock <<'EOF'
 schema: nope
 resolved: []
 generated_at: 123

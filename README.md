@@ -203,7 +203,7 @@ This resolves the canonical provider ref to:
 * a normal root skill id inferred from the matched skill metadata
 * a persisted canonical `skills[].provider_ref`
 
-This slice is intentionally conservative in 0.3.0: only explicit canonical refs are supported, only public GitHub-backed entries are in scope, and there is no provider search / private / auth flow.
+This slice is intentionally conservative in 0.3.0: only explicit canonical refs are supported, only public GitHub-backed anonymous HTTPS repo URLs are in scope, and there is no provider search / private / auth flow.
 
 ### Add from a public anonymous HTTPS repo
 
@@ -216,7 +216,7 @@ This compiles to:
 * a persisted `sources[]` entry with `type: git`
 * a normal root skill with `id + version + source`
 
-`--source <name>` is optional when you want to control the persisted source name. Private or authenticated repos are still out of scope.
+`--source <name>` is optional when you want to control the persisted source name. This is restricted public anonymous HTTPS git only, not arbitrary git; private or authenticated repos remain out of scope.
 
 ### Advanced compatibility: add from a local index or catalog
 
@@ -324,6 +324,8 @@ Primary Phase 1 flows are:
 
 Explicit local index/catalog sources are still supported as an advanced compatibility path for internal workflows and fixtures.
 
+These are product-level semantics. They intentionally compile down to the persisted low-level model: local roots use `skills[].path`, live sources use `sources[].type: index|git`, provider-backed repos add optional `sources[].provider.kind` plus root `skills[].provider_ref`, and packs stay separate as the materialization boundary.
+
 In the current implementation:
 
 * local path skills declared with `path`
@@ -333,7 +335,7 @@ In the current implementation:
 
 In the current release, a source means an entry in `sources[]`. Supported source types today are:
 
-* anonymous public HTTPS `git` with a plain repo URL only
+* restricted anonymous public HTTPS `git` with a plain repo URL only, not arbitrary git transports or authenticated/private repo flows
 * `index` for explicit local compatibility manifests
 
 A pack is a directory written by `skillspm pack --out <dir>`. It does not replace the logical source, and it is not a source type.
@@ -471,6 +473,8 @@ Each resolved node records both:
 
 * logical source provenance (`source`) — where the skill conceptually came from
 * materialization provenance (`materialization`) — whether this install used live content or restored from a pack
+
+This is the same intentional boundary as `skills.yaml`: higher-level product semantics compile down to low-level persisted source fields (`skills[].path`, `sources[].type: index|git`, optional `provider.kind` / `provider_ref`), while pack restores stay represented separately under `materialization`.
 
 In most cases, you do not edit `skills.lock` by hand. It is produced by `skillspm install` / `skillspm freeze`.
 
