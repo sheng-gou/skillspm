@@ -1,10 +1,15 @@
 import path from "node:path";
-import { CliError } from "./errors";
 import type { SkillsLock } from "./types";
-import { LOCK_FILE, exists, isResolvedSkillVersion, readDocument, writeYamlDocument } from "./utils";
+import { CliError } from "./errors";
+import { LOCK_FILE, ensureDir, exists, isResolvedSkillVersion, readDocument, writeYamlDocument } from "./utils";
+
+const ALLOWED_LOCKFILE_KEYS = new Set(["schema", "skills"]);
 
 export async function loadLockfile(cwd: string): Promise<SkillsLock | undefined> {
-  const lockPath = path.join(cwd, LOCK_FILE);
+  return loadLockfileFromPath(path.join(cwd, LOCK_FILE));
+}
+
+export async function loadLockfileFromPath(lockPath: string): Promise<SkillsLock | undefined> {
   if (!(await exists(lockPath))) {
     return undefined;
   }
@@ -19,96 +24,42 @@ export async function loadLockfile(cwd: string): Promise<SkillsLock | undefined>
 }
 
 export async function writeLockfile(cwd: string, lockfile: SkillsLock): Promise<void> {
-  const lockPath = path.join(cwd, LOCK_FILE);
-  const normalizedProject = canonicalizeProjectMetadata(lockfile.project);
-  const normalizedLockfile = {
-    ...lockfile,
-    ...(normalizedProject !== undefined ? { project: normalizedProject } : {})
-  } as SkillsLock;
-  if (normalizedProject === undefined) {
-    delete (normalizedLockfile as Partial<SkillsLock>).project;
-  }
-  await writeYamlDocument(lockPath, normalizedLockfile);
+  const orderedSkills = Object.fromEntries(
+    Object.entries(lockfile.skills).sort(([left], [right]) => left.localeCompare(right))
+  );
+  await ensureDir(cwd);
+  await writeYamlDocument(path.join(cwd, LOCK_FILE), {
+    schema: "skills-lock/v2",
+    skills: orderedSkills
+  });
 }
 
-function validateLockfile(lockfile: unknown): SkillsLock {
-  const value = lockfile as Partial<SkillsLock>;
+export function validateLockfile(lockfile: unknown): SkillsLock {
+  const value = lockfile as Partial<SkillsLock> & Record<string, unknown>;
   const errors: string[] = [];
 
-  if (!value || typeof value !== "object") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new CliError("skills.lock is invalid:\n- expected a YAML object", 2);
   }
-  if (value.schema !== "skills-lock/v1") {
-    errors.push("schema must be skills-lock/v1");
+  if (value.schema !== "skills-lock/v2") {
+    errors.push("schema must be skills-lock/v2");
   }
-  if (!value.resolved || typeof value.resolved !== "object" || Array.isArray(value.resolved)) {
-    errors.push("resolved must be an object");
+  for (const key of Object.keys(value)) {
+    if (!ALLOWED_LOCKFILE_KEYS.has(key)) {
+      errors.push(`unknown top-level key ${key}; allowed keys: schema, skills`);
+    }
   }
-  if (value.targets !== undefined && (typeof value.targets !== "object" || value.targets === null || Array.isArray(value.targets))) {
-    errors.push("targets must be an object");
+  if (!value.skills || typeof value.skills !== "object" || Array.isArray(value.skills)) {
+    errors.push("skills must be an object");
   }
-  if (typeof value.generated_at !== "string") {
-    errors.push("generated_at must be a string");
-  }
-  const project = normalizeLockfileProject(value.project, errors);
 
-  for (const [skillId, entry] of Object.entries(value.resolved ?? {})) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      errors.push(`resolved.${skillId} must be an object`);
+  for (const [skillId, version] of Object.entries(value.skills ?? {})) {
+    if (typeof version !== "string") {
+      errors.push(`skills.${skillId} must be a string`);
       continue;
     }
-    if (typeof entry.version !== "string") {
-      errors.push(`resolved.${skillId}.version must be a string`);
-    } else if (!isResolvedSkillVersion(entry.version)) {
-      errors.push(`resolved.${skillId}.version must be an exact semver or "unversioned"`);
-    }
-    if (entry.dependencies !== undefined && (!Array.isArray(entry.dependencies) || entry.dependencies.some((dependency) => typeof dependency !== "string"))) {
-      errors.push(`resolved.${skillId}.dependencies must be an array of strings`);
-    }
-    if (entry.source !== undefined && (typeof entry.source !== "object" || entry.source === null || Array.isArray(entry.source))) {
-      errors.push(`resolved.${skillId}.source must be an object`);
-    }
-    if (entry.artifact !== undefined && (typeof entry.artifact !== "object" || entry.artifact === null || Array.isArray(entry.artifact))) {
-      errors.push(`resolved.${skillId}.artifact must be an object`);
-    }
-  }
-
-  for (const [targetName, target] of Object.entries(value.targets ?? {})) {
-    if (!target || typeof target !== "object" || Array.isArray(target)) {
-      errors.push(`targets.${targetName} must be an object`);
-      continue;
-    }
-
-    const normalizedEntryCount = typeof target.entry_count === "string" && /^\d+$/.test(target.entry_count)
-      ? Number(target.entry_count)
-      : target.entry_count;
-    if (normalizedEntryCount !== undefined) {
-      target.entry_count = normalizedEntryCount;
-    }
-
-    if (target.type !== "openclaw" && target.type !== "codex" && target.type !== "claude_code" && target.type !== "generic") {
-      errors.push(`targets.${targetName}.type has unsupported value`);
-    }
-    if (typeof target.path !== "string") {
-      errors.push(`targets.${targetName}.path must be a string`);
-    }
-    if (target.configured_path !== undefined && typeof target.configured_path !== "string") {
-      errors.push(`targets.${targetName}.configured_path must be a string`);
-    }
-    if (typeof target.enabled !== "boolean") {
-      errors.push(`targets.${targetName}.enabled must be a boolean`);
-    }
-    if (target.mode !== "copy" && target.mode !== "symlink") {
-      errors.push(`targets.${targetName}.mode must be copy or symlink`);
-    }
-    if (target.status !== "synced") {
-      errors.push(`targets.${targetName}.status must be synced`);
-    }
-    if (typeof target.last_synced_at !== "string") {
-      errors.push(`targets.${targetName}.last_synced_at must be a string`);
-    }
-    if (normalizedEntryCount !== undefined && (typeof normalizedEntryCount !== "number" || !Number.isInteger(normalizedEntryCount) || normalizedEntryCount < 0)) {
-      errors.push(`targets.${targetName}.entry_count must be a non-negative integer`);
+    if (!isResolvedSkillVersion(version)) {
+      errors.push(`skills.${skillId} must be an exact semver or "unversioned"`);
     }
   }
 
@@ -116,48 +67,8 @@ function validateLockfile(lockfile: unknown): SkillsLock {
     throw new CliError(`skills.lock is invalid:\n- ${errors.join("\n- ")}`, 2);
   }
 
-  const normalizedLockfile = {
-    ...value,
-    ...(project !== undefined ? { project } : {})
-  } as SkillsLock;
-  if (project === undefined) {
-    delete (normalizedLockfile as Partial<SkillsLock>).project;
-  }
-  return normalizedLockfile;
-}
-
-function normalizeLockfileProject(project: unknown, errors: string[]): SkillsLock["project"] | undefined {
-  if (project === undefined) {
-    return undefined;
-  }
-  if (typeof project === "string") {
-    return { name: project };
-  }
-  if (!project || typeof project !== "object" || Array.isArray(project)) {
-    errors.push("project must be an object");
-    return undefined;
-  }
-  const value = project as { name?: unknown };
-  if (value.name !== undefined && typeof value.name !== "string") {
-    errors.push("project.name must be a string");
-    return undefined;
-  }
-  return value.name === undefined ? {} : { name: value.name };
-}
-
-function canonicalizeProjectMetadata(project: unknown): SkillsLock["project"] | undefined {
-  if (project === undefined) {
-    return undefined;
-  }
-  if (typeof project === "string") {
-    return { name: project };
-  }
-  if (!project || typeof project !== "object" || Array.isArray(project)) {
-    return undefined;
-  }
-  const value = project as { name?: unknown };
-  if (value.name !== undefined && typeof value.name !== "string") {
-    return undefined;
-  }
-  return value.name === undefined ? {} : { name: value.name };
+  return {
+    schema: "skills-lock/v2",
+    skills: Object.fromEntries(Object.entries(value.skills ?? {}).sort(([left], [right]) => left.localeCompare(right)))
+  };
 }

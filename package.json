@@ -1,7 +1,7 @@
 {
   "name": "skillspm",
-  "version": "0.2.1",
-  "description": "CLI for reproducible AI agent skills environments",
+  "version": "0.3.0",
+  "description": "CLI for id-first, cache-backed AI agent skills environments",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

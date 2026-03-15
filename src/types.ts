@@ -1,15 +1,6 @@
-export type ManifestSourceType = "index" | "git";
-
-export interface ManifestSource {
-  name: string;
-  type: ManifestSourceType;
-  url: string;
-}
-
 export interface ManifestSkill {
   id: string;
   version?: string;
-  source?: string;
   path?: string;
 }
 
@@ -22,21 +13,10 @@ export interface ManifestTarget {
 export type TargetType = ManifestTarget["type"];
 export type InstallMode = "copy" | "symlink";
 
-export interface ManifestSettings {
-  install_mode?: InstallMode;
-  auto_sync?: boolean;
-  strict?: boolean;
-}
-
 export interface SkillsManifest {
-  schema: "skills/v1";
-  project?: {
-    name?: string;
-  };
-  sources?: ManifestSource[];
+  schema: "skills/v2";
   skills: ManifestSkill[];
   targets?: ManifestTarget[];
-  settings?: ManifestSettings;
 }
 
 export interface SkillDependency {
@@ -67,59 +47,32 @@ export interface SkillMetadata {
   };
 }
 
-export interface IndexVersionEntry {
-  artifact?: {
-    type?: "path";
-    url?: string;
-  };
-  metadata?: {
-    path?: string;
-  };
-}
-
-export interface IndexSkillEntry {
-  id: string;
-  versions: Record<string, IndexVersionEntry>;
-}
-
-export interface SkillsIndex {
-  schema?: "skills-index/v1";
-  skills?: IndexSkillEntry[];
-}
-
-export interface LockResolvedNode {
-  version: string;
-  source?: {
-    type: "index" | "git" | "path";
-    name?: string;
-    url?: string;
-  };
-  artifact?: {
-    type: "path";
-    url?: string;
-  };
-  dependencies?: string[];
-}
-
-export interface LockTargetState {
-  type: TargetType;
-  path: string;
-  configured_path?: string;
-  enabled: boolean;
-  mode: InstallMode;
-  status: "synced";
-  last_synced_at: string;
-  entry_count?: number;
-}
-
 export interface SkillsLock {
-  schema: "skills-lock/v1";
-  project?: {
-    name?: string;
-  };
-  resolved: Record<string, LockResolvedNode>;
-  targets?: Record<string, LockTargetState>;
+  schema: "skills-lock/v2";
+  skills: Record<string, string>;
+}
+
+export interface LibrarySkillVersion {
+  path: string;
+  cached_at: string;
+}
+
+export interface LibrarySkillRecord {
+  versions: Record<string, LibrarySkillVersion>;
+}
+
+export interface SkillsLibrary {
+  schema: "skills-library/v1";
+  skills: Record<string, LibrarySkillRecord>;
+}
+
+export interface SkillsPackManifest {
+  schema: "skills-pack-manifest/v1";
   generated_at: string;
+  skills: Record<string, {
+    version: string;
+    entry: string;
+  }>;
 }
 
 export interface ResolvedSkillNode {
@@ -128,13 +81,12 @@ export interface ResolvedSkillNode {
   dependencies: SkillDependency[];
   installPath: string;
   metadata?: SkillMetadata;
-  source?: LockResolvedNode["source"];
-  artifact?: LockResolvedNode["artifact"];
   root: boolean;
 }
 
 export interface ResolutionResult {
   manifest: SkillsManifest;
+  lockfile?: SkillsLock;
   nodes: Map<string, ResolvedSkillNode>;
   rootSkillIds: string[];
 }

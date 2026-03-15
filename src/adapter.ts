@@ -1,12 +1,12 @@
 import os from "node:os";
 import path from "node:path";
-import { readdir, rm, symlink } from "node:fs/promises";
-import { loadLockfile, writeLockfile } from "./lockfile";
+import { rm, symlink } from "node:fs/promises";
+import { loadLibrary, resolveCachedSkillPath } from "./library";
+import { loadLockfile } from "./lockfile";
 import { CliError } from "./errors";
-import { resolveStateContainmentRoot } from "./scope";
 import type { ScopeLayout } from "./scope";
-import type { InstallMode, LockTargetState, ManifestTarget, SkillsManifest, TargetType } from "./types";
-import { copyDir, ensureDir, exists, printInfo, printSuccess, removeStaleRootEntries, resolveCleanupRoot } from "./utils";
+import type { InstallMode, ManifestTarget, SkillsManifest, TargetType } from "./types";
+import { assertConfiguredPathWithinRootReal, assertPathWithinRootReal, copyDir, ensureDir } from "./utils";
 
 export interface SyncOptions {
   mode?: string;
@@ -16,12 +16,19 @@ export interface SyncOptions {
 interface ResolvedTarget {
   type: TargetType;
   path: string;
-  configuredPath?: string;
   containmentRoot?: string;
+  configuredPath?: string;
 }
 
-export function resolveInstallMode(mode?: string, fallback?: InstallMode): InstallMode {
-  const selected = mode ?? fallback ?? "copy";
+interface SyncSkillEntry {
+  skillId: string;
+  version: string;
+  sourcePath: string;
+  entryName: string;
+}
+
+export function resolveInstallMode(mode?: string): InstallMode {
+  const selected = mode ?? "copy";
   if (selected !== "copy" && selected !== "symlink") {
     throw new CliError(`Unsupported sync mode ${selected}. Use copy or symlink.`, 2);
   }
@@ -43,21 +50,14 @@ export function resolveDefaultTargetPath(type: TargetType): string | undefined {
 }
 
 export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest, options: SyncOptions = {}): Promise<void> {
-  if (!(await exists(layout.installedRoot))) {
-    throw new CliError("No installed skills found. Run `skillspm install` first.", 2);
+  const lockfile = await loadLockfile(layout.rootDir);
+  if (!lockfile) {
+    throw new CliError("No skills.lock found. Run `skillspm install` or `skillspm freeze` first.", 2);
   }
-  await resolveCleanupRoot(layout.installedRoot, {
-    containmentRoot: resolveStateContainmentRoot(layout),
-    label: `cleanup root ${layout.installedRoot}`
-  });
 
-  const installedEntries = (await readdir(layout.installedRoot, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-    .map((entry) => entry.name)
-    .sort((left, right) => left.localeCompare(right));
-
-  if (installedEntries.length === 0) {
-    throw new CliError("No installed skills found. Run `skillspm install` first.", 2);
+  const entries = Object.entries(lockfile.skills).sort(([left], [right]) => left.localeCompare(right));
+  if (entries.length === 0) {
+    throw new CliError("No locked skills found. Run `skillspm install` or `skillspm freeze` first.", 2);
   }
 
   const targets = resolveTargets(layout.rootDir, manifest, options.targetType);
@@ -65,51 +65,37 @@ export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest,
     throw new CliError("No enabled sync targets found in skills.yaml.", 2);
   }
 
-  const mode = resolveInstallMode(options.mode, manifest.settings?.install_mode);
-  let currentLock = await loadLockfile(layout.rootDir);
-  printInfo("Syncing targets...");
+  const library = await loadLibrary(layout);
+  const mode = resolveInstallMode(options.mode);
+  const syncEntries: SyncSkillEntry[] = [];
+
+  for (const [skillId, version] of entries) {
+    const sourcePath = await resolveCachedSkillPath(layout, library, skillId, version);
+    if (!sourcePath) {
+      throw new CliError(`Cached files for ${skillId}@${version} are missing from ${layout.librarySkillsDir}.`, 4);
+    }
+
+    syncEntries.push({
+      skillId,
+      version,
+      sourcePath,
+      entryName: path.basename(sourcePath)
+    });
+  }
+
+  await validateTargetsBeforeSync(targets, syncEntries);
 
   for (const target of targets) {
-    const cleanupOptions = target.containmentRoot
-      ? {
-          containmentRoot: target.containmentRoot,
-          label: `cleanup root ${target.path}`
-        }
-      : {};
-    await resolveCleanupRoot(target.path, cleanupOptions);
     await ensureDir(target.path);
-    for (const entryName of installedEntries) {
-      const sourcePath = path.join(layout.installedRoot, entryName);
-      const targetPath = path.join(target.path, entryName);
+
+    for (const entry of syncEntries) {
+      const targetPath = path.join(target.path, entry.entryName);
       if (mode === "symlink") {
         await rm(targetPath, { recursive: true, force: true });
-        await symlink(sourcePath, targetPath, "dir");
+        await symlink(entry.sourcePath, targetPath, "dir");
       } else {
-        await copyDir(sourcePath, targetPath);
+        await copyDir(entry.sourcePath, targetPath);
       }
-    }
-    await removeStaleRootEntries(target.path, installedEntries, cleanupOptions);
-    printSuccess(`${target.type} synced (${mode})`);
-
-    if (currentLock) {
-      const targetState: LockTargetState = {
-        type: target.type,
-        path: target.path,
-        ...(target.configuredPath ? { configured_path: target.configuredPath } : {}),
-        enabled: true,
-        mode,
-        status: "synced",
-        last_synced_at: new Date().toISOString(),
-        entry_count: installedEntries.length
-      };
-      currentLock = {
-        ...currentLock,
-        targets: {
-          ...(currentLock.targets ?? {}),
-          [target.type]: targetState
-        }
-      };
-      await writeLockfile(layout.rootDir, currentLock);
     }
   }
 }
@@ -138,8 +124,8 @@ function resolveTarget(cwd: string, target: ManifestTarget): ResolvedTarget {
   return {
     type: target.type,
     path: resolvedPath,
-    configuredPath: target.path,
-    containmentRoot: target.path ? cwd : path.dirname(resolvedPath)
+    containmentRoot: target.path ? cwd : path.dirname(resolvedPath),
+    configuredPath: target.path
   };
 }
 
@@ -148,4 +134,35 @@ function parseTargetType(value: string): TargetType {
     return value;
   }
   throw new CliError(`Unknown target ${value}. Use openclaw, codex, claude_code, or generic.`, 2);
+}
+
+async function validateTargetsBeforeSync(targets: ResolvedTarget[], syncEntries: SyncSkillEntry[]): Promise<void> {
+  for (const target of targets) {
+    await validateTargetContainment(target);
+    for (const entry of syncEntries) {
+      await assertPathWithinRootReal(
+        target.path,
+        path.join(target.path, entry.entryName),
+        `sync destination for ${entry.skillId}@${entry.version}`
+      );
+    }
+  }
+}
+
+async function validateTargetContainment(target: ResolvedTarget): Promise<void> {
+  if (!target.containmentRoot) {
+    return;
+  }
+
+  if (target.configuredPath) {
+    await assertConfiguredPathWithinRootReal(
+      target.containmentRoot,
+      target.configuredPath,
+      target.path,
+      `target ${target.type} path ${target.configuredPath}`
+    );
+    return;
+  }
+
+  await assertPathWithinRootReal(target.containmentRoot, target.path, `target ${target.type} path ${target.path}`);
 }

@@ -1,48 +1,45 @@
 import path from "node:path";
 import semver from "semver";
 import { CliError } from "./errors";
-import { loadIndex, findMatchingIndexVersion, resolveIndexArtifactRoot } from "./index-source";
+import { loadLibrary, resolveCachedSkillPath, selectCachedVersion } from "./library";
+import { loadLockfile } from "./lockfile";
 import { loadManifest } from "./manifest";
-import { loadSkillMetadata, validateSkillMetadata } from "./skill";
-import type {
-  ManifestSkill,
-  ManifestSource,
-  SkillsManifest,
-  ResolutionResult,
-  ResolvedSkillNode,
-  SkillDependency
-} from "./types";
-import {
-  assertConfiguredPathWithinRootReal,
-  assertSkillRootMarker,
-  exists,
-  isDirectory,
-  readDocument,
-  resolveFileUrlOrPath
-} from "./utils";
+import { loadSkillMetadata } from "./skill";
+import type { LoadedPack } from "./pack";
+import type { ManifestSkill, ResolutionResult, ResolvedSkillNode, SkillDependency, SkillsLock, SkillsManifest } from "./types";
+import { assertSkillRootMarker, exists, isDirectory, resolveFileUrlOrPath } from "./utils";
+import { resolveScopeLayout } from "./scope";
 
 interface ResolveContext {
   cwd: string;
+  manifest: SkillsManifest;
+  lockfile?: SkillsLock;
+  pack?: LoadedPack;
   nodes: Map<string, ResolvedSkillNode>;
-  rootSkillIds: string[];
   rootLookup: Map<string, ManifestSkill>;
-  sourceLookup: Map<string, ManifestSource>;
+  rootSkillIds: string[];
+  library: Awaited<ReturnType<typeof loadLibrary>>;
 }
 
 export interface ResolveProjectOptions {
   manifest?: SkillsManifest;
+  lockfile?: SkillsLock;
+  pack?: LoadedPack;
 }
 
 export async function resolveProject(cwd: string, options: ResolveProjectOptions = {}): Promise<ResolutionResult> {
   const manifest = options.manifest ?? await loadManifest(cwd);
-  const rootLookup = new Map<string, ManifestSkill>(manifest.skills.map((skill) => [skill.id, skill]));
-  const sourceLookup = new Map<string, ManifestSource>((manifest.sources ?? []).map((source) => [source.name, source]));
+  const lockfile = options.lockfile ?? await loadLockfile(cwd);
+  const layout = resolveScopeLayout(cwd);
   const context: ResolveContext = {
     cwd,
+    manifest,
+    lockfile,
+    pack: options.pack,
     nodes: new Map(),
+    rootLookup: new Map(manifest.skills.map((skill) => [skill.id, skill])),
     rootSkillIds: manifest.skills.map((skill) => skill.id),
-    rootLookup,
-    sourceLookup
+    library: await loadLibrary(layout)
   };
 
   for (const rootSkill of manifest.skills) {
@@ -51,6 +48,7 @@ export async function resolveProject(cwd: string, options: ResolveProjectOptions
 
   return {
     manifest,
+    lockfile,
     nodes: context.nodes,
     rootSkillIds: context.rootSkillIds
   };
@@ -67,71 +65,35 @@ async function resolveManifestSkill(
     return;
   }
 
-  const source = selectSource(context, manifestSkill);
-  if (source.type === "git") {
-    throw new CliError(`Source ${source.name} uses type git. The schema is accepted, but git source install is not implemented yet.`, 3);
-  }
-  if (source.type !== "index") {
-    throw new CliError(`Source ${source.name} uses unsupported type ${source.type}.`, 3);
+  const version = selectSkillVersion(context, manifestSkill, chain);
+  const installPath = await resolveCachedOrPackedSkillPath(context, manifestSkill.id, version);
+  if (!installPath) {
+    throw new CliError(`Skill ${manifestSkill.id}@${version} is not available in the local library cache.`, 3);
   }
 
-  const { index, indexPath } = await loadIndex(source.url, context.cwd);
-  const skillEntry = index.skills?.find((entry) => entry.id === manifestSkill.id);
-  if (!skillEntry) {
-    throw new CliError(`Skill ${manifestSkill.id} was not found in source ${source.name}`, 3);
+  if (!(await exists(installPath)) || !(await isDirectory(installPath))) {
+    throw new CliError(`Cached skill path is missing for ${manifestSkill.id}@${version}: ${installPath}`, 4);
   }
-  const { version, entry } = findMatchingIndexVersion(index, manifestSkill.id, manifestSkill.version);
-  const artifactRoot = resolveIndexArtifactRoot(indexPath, skillEntry, version, entry);
-  if (entry.artifact?.url) {
-    await assertConfiguredPathWithinRootReal(
-      context.cwd,
-      entry.artifact.url,
-      artifactRoot,
-      `artifact path for ${manifestSkill.id}@${version}`
-    );
-  }
-  const metadataPath = entry.metadata?.path
-    ? resolveFileUrlOrPath(artifactRoot, entry.metadata.path)
-    : path.join(artifactRoot, "skill.yaml");
-  if (entry.metadata?.path) {
-    await assertConfiguredPathWithinRootReal(
-      artifactRoot,
-      entry.metadata.path,
-      metadataPath,
-      `metadata path for ${manifestSkill.id}@${version}`
-    );
-  }
+  await assertSkillRootMarker(installPath, `Skill ${manifestSkill.id}@${version}`);
 
-  if (!(await isDirectory(artifactRoot))) {
-    throw new CliError(`Artifact path for ${manifestSkill.id}@${version} does not exist: ${artifactRoot}`, 4);
-  }
-  await assertSkillRootMarker(artifactRoot, `Skill ${manifestSkill.id}@${version}`);
+  const metadata = await loadSkillMetadata(installPath);
+  const resolvedId = metadata?.id ?? manifestSkill.id;
+  const resolvedVersion = metadata?.version ?? version;
+  ensureMatchingId(manifestSkill.id, resolvedId);
+  ensureVersionConsistency(manifestSkill.id, version, resolvedVersion);
 
-  const metadata = await loadSkillMetadataFromExplicitPath(artifactRoot, metadataPath);
-  const dependencies = metadata?.dependencies ?? [];
   const node: ResolvedSkillNode = {
-    id: metadata?.id ?? manifestSkill.id,
-    version,
-    dependencies,
-    installPath: artifactRoot,
+    id: resolvedId,
+    version: resolvedVersion,
+    dependencies: metadata?.dependencies ?? [],
+    installPath,
     metadata,
-    source: {
-      type: "index",
-      name: source.name,
-      url: source.url
-    },
-    artifact: {
-      type: "path",
-      url: artifactRoot
-    },
     root: isRoot
   };
-  ensureMatchingId(manifestSkill.id, node.id);
-
   await registerNode(context, node, manifestSkill.version, chain);
 
-  for (const dependency of dependencies) {
-    await resolveDependency(context, dependency, source, [...chain, node.id]);
+  for (const dependency of node.dependencies) {
+    await resolveDependency(context, dependency, [...chain, node.id]);
   }
 }
 
@@ -143,12 +105,6 @@ async function resolvePathSkill(
   chain: string[]
 ): Promise<void> {
   const absolutePath = resolveFileUrlOrPath(context.cwd, configuredPath);
-  await assertConfiguredPathWithinRootReal(
-    context.cwd,
-    configuredPath,
-    absolutePath,
-    `local skill path for ${manifestSkill.id}`
-  );
   if (!(await exists(absolutePath))) {
     throw new CliError(`Local skill path for ${manifestSkill.id} does not exist: ${configuredPath}`, 4);
   }
@@ -159,58 +115,76 @@ async function resolvePathSkill(
 
   const metadata = await loadSkillMetadata(absolutePath);
   const resolvedId = metadata?.id ?? manifestSkill.id;
-  const version = metadata?.version ?? "unversioned";
+  const version = metadata?.version ?? manifestSkill.version ?? "unversioned";
   const node: ResolvedSkillNode = {
     id: resolvedId,
     version,
     dependencies: metadata?.dependencies ?? [],
     installPath: absolutePath,
     metadata,
-    source: {
-      type: "path",
-      url: absolutePath
-    },
-    artifact: {
-      type: "path",
-      url: absolutePath
-    },
     root: isRoot
   };
   ensureMatchingId(manifestSkill.id, node.id);
-
   await registerNode(context, node, manifestSkill.version, chain);
 
   for (const dependency of node.dependencies) {
-    const inheritedSource = manifestSkill.source ? context.sourceLookup.get(manifestSkill.source) : undefined;
-    await resolveDependency(context, dependency, inheritedSource, [...chain, node.id]);
+    await resolveDependency(context, dependency, [...chain, node.id]);
   }
 }
 
-async function resolveDependency(
-  context: ResolveContext,
-  dependency: SkillDependency,
-  inheritedSource: ManifestSource | undefined,
-  chain: string[]
-): Promise<void> {
+async function resolveDependency(context: ResolveContext, dependency: SkillDependency, chain: string[]): Promise<void> {
   const explicitRoot = context.rootLookup.get(dependency.id);
-  if (explicitRoot?.path) {
-    await resolveManifestSkill(context, explicitRoot, false, chain);
-    ensureDependencyRange(explicitRoot.id, context.nodes.get(explicitRoot.id)?.version, dependency.version, chain);
-    return;
+  const manifestSkill: ManifestSkill = explicitRoot
+    ? explicitRoot
+    : {
+        id: dependency.id,
+        ...(dependency.version ? { version: dependency.version } : {})
+      };
+  await resolveManifestSkill(context, manifestSkill, false, chain);
+  ensureDependencyRange(dependency.id, context.nodes.get(dependency.id)?.version, dependency.version, chain);
+}
+
+function selectSkillVersion(context: ResolveContext, manifestSkill: ManifestSkill, chain: string[]): string {
+  const requested = manifestSkill.version;
+
+  if (requested && isExactVersion(requested)) {
+    return requested;
   }
 
-  const manifestSkill: ManifestSkill = explicitRoot
-    ? {
-        ...explicitRoot,
-        source: explicitRoot.source ?? inheritedSource?.name
-      }
-    : {
-    id: dependency.id,
-    version: dependency.version,
-    source: inheritedSource?.name
-  };
-  await resolveManifestSkill(context, manifestSkill, false, chain);
-  ensureDependencyRange(manifestSkill.id, context.nodes.get(manifestSkill.id)?.version, dependency.version, chain);
+  const lockedVersion = context.lockfile?.skills[manifestSkill.id];
+  if (lockedVersion && satisfiesRequestedVersion(lockedVersion, requested)) {
+    return lockedVersion;
+  }
+
+  const packedVersion = context.pack?.manifest.skills[manifestSkill.id]?.version;
+  if (packedVersion && satisfiesRequestedVersion(packedVersion, requested)) {
+    return packedVersion;
+  }
+
+  const cachedVersion = selectCachedVersion(context.library, manifestSkill.id, requested);
+  if (cachedVersion) {
+    return cachedVersion;
+  }
+
+  const via = chain.length > 0 ? ` via ${chain.join(" -> ")}` : "";
+  throw new CliError(`Unable to resolve ${manifestSkill.id}${requested ? ` (${requested})` : ""}${via}. Add a local path, install from a pack, or freeze exact versions first.`, 3);
+}
+
+async function resolveCachedOrPackedSkillPath(
+  context: ResolveContext,
+  skillId: string,
+  version: string
+): Promise<string | undefined> {
+  const packPath = context.pack?.manifest.skills[skillId];
+  if (packPath && packPath.version === version) {
+    const candidate = path.join(context.pack.skillsDir, packPath.entry);
+    if (await exists(candidate)) {
+      return candidate;
+    }
+  }
+
+  const layout = resolveScopeLayout(context.cwd);
+  return resolveCachedSkillPath(layout, context.library, skillId, version);
 }
 
 async function registerNode(
@@ -233,6 +207,23 @@ async function registerNode(
   context.nodes.set(node.id, node);
 }
 
+function isExactVersion(value: string): boolean {
+  return value === "unversioned" || semver.valid(value) === value;
+}
+
+function satisfiesRequestedVersion(resolvedVersion: string, requestedRange: string | undefined): boolean {
+  if (!requestedRange || resolvedVersion === "unversioned") {
+    return true;
+  }
+  if (requestedRange === "unversioned") {
+    return resolvedVersion === "unversioned";
+  }
+  if (semver.valid(requestedRange) === requestedRange) {
+    return requestedRange === resolvedVersion;
+  }
+  return semver.satisfies(resolvedVersion, requestedRange);
+}
+
 function ensureDependencyRange(
   skillId: string,
   resolvedVersion: string | undefined,
@@ -242,13 +233,31 @@ function ensureDependencyRange(
   if (!requestedRange || !resolvedVersion || resolvedVersion === "unversioned") {
     return;
   }
-  if (!semver.satisfies(resolvedVersion, requestedRange)) {
-    const fromChain = chain.length > 0 ? `${chain.join(" -> ")} -> ${skillId}` : skillId;
-    throw new CliError(
-      `Dependency conflict detected for ${skillId}: resolved ${resolvedVersion} does not satisfy ${requestedRange} requested by ${fromChain}`,
-      3
-    );
+  if (requestedRange === "unversioned") {
+    if (resolvedVersion !== "unversioned") {
+      throw new CliError(buildRangeConflictMessage(skillId, resolvedVersion, requestedRange, chain), 3);
+    }
+    return;
   }
+  if (semver.valid(requestedRange) === requestedRange) {
+    if (resolvedVersion !== requestedRange) {
+      throw new CliError(buildRangeConflictMessage(skillId, resolvedVersion, requestedRange, chain), 3);
+    }
+    return;
+  }
+  if (!semver.satisfies(resolvedVersion, requestedRange)) {
+    throw new CliError(buildRangeConflictMessage(skillId, resolvedVersion, requestedRange, chain), 3);
+  }
+}
+
+function buildRangeConflictMessage(
+  skillId: string,
+  resolvedVersion: string,
+  requestedRange: string,
+  chain: string[]
+): string {
+  const fromChain = chain.length > 0 ? `${chain.join(" -> ")} -> ${skillId}` : skillId;
+  return `Dependency conflict detected for ${skillId}: resolved ${resolvedVersion} does not satisfy ${requestedRange} requested by ${fromChain}`;
 }
 
 function buildConflictMessage(skillId: string, currentVersion: string, newVersion: string, chain: string[]): string {
@@ -256,36 +265,14 @@ function buildConflictMessage(skillId: string, currentVersion: string, newVersio
   return `Dependency conflict detected for ${skillId}: ${currentVersion} vs ${newVersion}${detail}`;
 }
 
-function selectSource(context: ResolveContext, manifestSkill: ManifestSkill): ManifestSource {
-  if (manifestSkill.source) {
-    const source = context.sourceLookup.get(manifestSkill.source);
-    if (!source) {
-      throw new CliError(`Unknown source ${manifestSkill.source} for ${manifestSkill.id}`, 2);
-    }
-    return source;
-  }
-
-  const indexSources = [...context.sourceLookup.values()].filter((source) => source.type === "index");
-  if (indexSources.length === 1) {
-    return indexSources[0];
-  }
-
-  throw new CliError(`Skill ${manifestSkill.id} must declare source because there is not exactly one index source`, 2);
-}
-
-async function loadSkillMetadataFromExplicitPath(skillRoot: string, metadataPath: string) {
-  if (!(await exists(metadataPath))) {
-    return undefined;
-  }
-  if (path.dirname(metadataPath) === skillRoot && path.basename(metadataPath) === "skill.yaml") {
-    return loadSkillMetadata(skillRoot);
-  }
-  const raw = await readDocument<unknown>(metadataPath);
-  return validateSkillMetadata(raw, metadataPath);
-}
-
 function ensureMatchingId(requestedId: string, resolvedId: string): void {
   if (requestedId !== resolvedId) {
-    throw new CliError(`Resolved skill id mismatch: requested ${requestedId} but metadata declares ${resolvedId}`, 3);
+    throw new CliError(`Skill id mismatch: requested ${requestedId} but resolved ${resolvedId}`, 3);
+  }
+}
+
+function ensureVersionConsistency(skillId: string, expectedVersion: string, resolvedVersion: string): void {
+  if (expectedVersion !== resolvedVersion) {
+    throw new CliError(`Skill ${skillId} expected version ${expectedVersion} but metadata resolved ${resolvedVersion}`, 3);
   }
 }

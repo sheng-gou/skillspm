@@ -1,74 +1,54 @@
 import path from "node:path";
 import semver from "semver";
 import { CliError } from "./errors";
-import type { ManifestSkill, ManifestSource, ManifestTarget, SkillsManifest } from "./types";
-import { MANIFEST_FILE, exists, readDocument, writeYamlDocument } from "./utils";
+import type { ManifestSkill, ManifestTarget, SkillsManifest } from "./types";
+import { MANIFEST_FILE, ensureDir, exists, readDocument, writeYamlDocument } from "./utils";
 
-const SUPPORTED_RANGE_PATTERN = /^(?:\d+\.\d+\.\d+|\^\d+\.\d+\.\d+|~\d+\.\d+\.\d+)$/;
+const SUPPORTED_RANGE_PATTERN = /^(?:\d+\.\d+\.\d+|\^\d+\.\d+\.\d+|~\d+\.\d+\.\d+|unversioned)$/;
+const ALLOWED_MANIFEST_KEYS = new Set(["schema", "skills", "targets"]);
 
 export function isSupportedVersionRange(value: string): boolean {
+  if (value === "unversioned") {
+    return true;
+  }
   return SUPPORTED_RANGE_PATTERN.test(value) && semver.validRange(value) !== null;
 }
 
 export function validateManifest(manifest: unknown): SkillsManifest {
   const errors: string[] = [];
-  const value = manifest as Partial<SkillsManifest>;
+  const value = manifest as Partial<SkillsManifest> & Record<string, unknown>;
 
-  if (!value || typeof value !== "object") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new CliError("skills.yaml must be a YAML object", 2);
   }
-  if (value.schema !== "skills/v1") {
-    errors.push("schema must be skills/v1");
+  if (value.schema !== "skills/v2") {
+    errors.push("schema must be skills/v2");
   }
-  if (value.project !== undefined && (typeof value.project !== "object" || value.project === null || Array.isArray(value.project))) {
-    errors.push("project must be an object");
-  } else if (value.project?.name !== undefined && typeof value.project.name !== "string") {
-    errors.push("project.name must be a string");
+  for (const key of Object.keys(value)) {
+    if (!ALLOWED_MANIFEST_KEYS.has(key)) {
+      errors.push(`unknown top-level key ${key}; allowed keys: schema, skills, targets`);
+    }
   }
   if (!Array.isArray(value.skills)) {
     errors.push("skills must be an array");
   }
-  if (value.sources && !Array.isArray(value.sources)) {
-    errors.push("sources must be an array");
-  }
-  if (value.targets && !Array.isArray(value.targets)) {
+  if (value.targets !== undefined && !Array.isArray(value.targets)) {
     errors.push("targets must be an array");
-  }
-  if (value.settings && typeof value.settings !== "object") {
-    errors.push("settings must be an object");
-  } else if (value.settings) {
-    if (value.settings.install_mode !== undefined && !["copy", "symlink"].includes(value.settings.install_mode)) {
-      errors.push("settings.install_mode must be copy or symlink");
-    }
-    if (value.settings.auto_sync !== undefined && typeof value.settings.auto_sync !== "boolean") {
-      errors.push("settings.auto_sync must be a boolean");
-    }
-    if (value.settings.strict !== undefined && typeof value.settings.strict !== "boolean") {
-      errors.push("settings.strict must be a boolean");
-    }
-  }
-
-  const sourceNames = new Set<string>();
-  for (const source of value.sources ?? []) {
-    validateSource(source, errors, sourceNames);
-  }
-
-  for (const target of value.targets ?? []) {
-    validateTarget(target, errors);
   }
 
   const rootIds = new Set<string>();
   for (const skill of value.skills ?? []) {
     validateManifestSkill(skill, errors);
-    if (typeof skill.id === "string") {
+    if (typeof skill?.id === "string") {
       if (rootIds.has(skill.id)) {
         errors.push(`duplicate root skill id ${skill.id}`);
       }
       rootIds.add(skill.id);
     }
-    if (skill.source && !sourceNames.has(skill.source)) {
-      errors.push(`skill ${skill.id} references unknown source ${skill.source}`);
-    }
+  }
+
+  for (const target of value.targets ?? []) {
+    validateTarget(target, errors);
   }
 
   if (errors.length > 0) {
@@ -78,28 +58,8 @@ export function validateManifest(manifest: unknown): SkillsManifest {
   return value as SkillsManifest;
 }
 
-function validateSource(source: Partial<ManifestSource>, errors: string[], sourceNames: Set<string>): void {
-  if (!source || typeof source !== "object") {
-    errors.push("sources entries must be objects");
-    return;
-  }
-  if (!source.name || typeof source.name !== "string") {
-    errors.push("source.name must be a string");
-  } else if (sourceNames.has(source.name)) {
-    errors.push(`duplicate source name ${source.name}`);
-  } else {
-    sourceNames.add(source.name);
-  }
-  if (source.type !== "index" && source.type !== "git") {
-    errors.push(`source ${source.name ?? "<unknown>"} has unsupported type ${String(source.type)}`);
-  }
-  if (!source.url || typeof source.url !== "string") {
-    errors.push(`source ${source.name ?? "<unknown>"} must include url`);
-  }
-}
-
 function validateManifestSkill(skill: Partial<ManifestSkill>, errors: string[]): void {
-  if (!skill || typeof skill !== "object") {
+  if (!skill || typeof skill !== "object" || Array.isArray(skill)) {
     errors.push("skills entries must be objects");
     return;
   }
@@ -109,20 +69,17 @@ function validateManifestSkill(skill: Partial<ManifestSkill>, errors: string[]):
   if (skill.path !== undefined && typeof skill.path !== "string") {
     errors.push(`skill ${skill.id ?? "<unknown>"} path must be a string`);
   }
-  if (skill.source !== undefined && typeof skill.source !== "string") {
-    errors.push(`skill ${skill.id ?? "<unknown>"} source must be a string`);
-  }
   if (skill.version !== undefined) {
     if (typeof skill.version !== "string") {
       errors.push(`skill ${skill.id ?? "<unknown>"} version must be a string`);
     } else if (!isSupportedVersionRange(skill.version)) {
-      errors.push(`skill ${skill.id ?? "<unknown>"} version must be exact, caret, or tilde semver`);
+      errors.push(`skill ${skill.id ?? "<unknown>"} version must be exact, caret, tilde, or unversioned`);
     }
   }
 }
 
 function validateTarget(target: Partial<ManifestTarget>, errors: string[]): void {
-  if (!target || typeof target !== "object") {
+  if (!target || typeof target !== "object" || Array.isArray(target)) {
     errors.push("targets entries must be objects");
     return;
   }
@@ -138,28 +95,25 @@ function validateTarget(target: Partial<ManifestTarget>, errors: string[]): void
 }
 
 export async function loadManifest(cwd: string): Promise<SkillsManifest> {
-  const manifestPath = path.join(cwd, MANIFEST_FILE);
+  return loadManifestFromPath(path.join(cwd, MANIFEST_FILE));
+}
+
+export async function loadManifestFromPath(manifestPath: string): Promise<SkillsManifest> {
   if (!(await exists(manifestPath))) {
-    throw new CliError("skills.yaml not found. Run `skillspm init` first.", 2);
+    throw new CliError("skills.yaml not found.", 2);
   }
   return validateManifest(await readDocument<unknown>(manifestPath));
 }
 
 export async function saveManifest(cwd: string, manifest: SkillsManifest): Promise<void> {
   const manifestPath = path.join(cwd, MANIFEST_FILE);
+  await ensureDir(path.dirname(manifestPath));
   await writeYamlDocument(manifestPath, manifest);
 }
 
-export function createDefaultManifest(projectName: string): SkillsManifest {
+export function createDefaultManifest(): SkillsManifest {
   return {
-    schema: "skills/v1",
-    project: { name: projectName },
-    sources: [],
-    skills: [],
-    settings: {
-      install_mode: "copy",
-      auto_sync: false,
-      strict: false
-    }
+    schema: "skills/v2",
+    skills: []
   };
 }

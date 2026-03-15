@@ -2,238 +2,144 @@
 
 This repository uses `skillspm` to manage a declarative Skills environment.
 
-## Core principle
+## Phase 2 contract
 
-The source of truth is `skills.yaml`.
+Project truth lives in:
 
-Agents should treat `skills.yaml` as the authoritative definition of the Skills environment.
+- `skills.yaml`
+- `skills.lock`
 
-Typical workflow:
+Machine-local cache lives in:
 
-1. install from `skills.yaml`
-2. inspect or diagnose if needed
-3. sync installed Skills to configured targets
-4. freeze the resolved state when explicitly requested
+- `~/.skillspm/library.yaml`
+- `~/.skillspm/skills/`
 
-## Primary commands
+`skills.yaml` keeps the root `skills` and `targets` for the environment.
 
-Use these commands as the default workflow:
+`skills.lock` keeps the exact resolved skill versions.
+
+The library cache is not project truth. It is the local materialization layer used by `install`, `pack`, and `sync`.
+
+## Default workflow for agents
+
+Use this sequence unless the user asks for something different:
+
+1. `skillspm install`
+2. `skillspm doctor --json` if validation or diagnosis is needed
+3. `skillspm sync` when configured targets should receive the locked skills
+4. `skillspm freeze` only when the task explicitly requires updating `skills.lock`
+
+## Public command surface
+
+Treat these as the current public Phase-2 commands:
 
 ```bash
+skillspm add
 skillspm install
-skillspm doctor --json
-skillspm sync
-skillspm inspect <path> --write
+skillspm pack
 skillspm freeze
-```
-
-## Repository setup behavior
-
-When this repository contains a `skills.yaml` file, an agent should usually run:
-
-```bash
-skillspm install
-skillspm doctor --json
-```
-
-If targets are already configured in `skills.yaml`, the agent may also run:
-
-```bash
+skillspm adopt
 skillspm sync
+skillspm doctor
+skillspm help
 ```
 
-## Scope rules
+Do not rely on removed command names in plans, examples, or repo guidance.
 
-Default to project scope.
+## What each command is for
 
-That means:
+### `skillspm add`
 
-- read `./skills.yaml`
-- install into `./.skills/`
-- freeze into `./skills.lock`
+Add a root skill entry to `skills.yaml`.
 
-Only use global scope when the user explicitly asks for it.
-
-Examples:
-
-```bash
-skillspm install -g
-skillspm sync -g
-skillspm freeze -g
-```
-
-Do not switch to `-g` on your own.
-
-## When to use each command
+Use this when the desired environment should include a new skill id, version range, or local path.
 
 ### `skillspm install`
 
-Use when:
+Resolve the declared environment and cache exact skills locally.
 
-- `skills.yaml` exists and the environment needs to be installed
-- the user asks to set up the repo
-- the user changes `skills.yaml` and wants the environment applied
+`skillspm install` selects input in this order:
 
-### `skillspm doctor --json`
+1. explicit path to `skills.yaml` or `*.skillspm.tgz`
+2. current-scope `skills.yaml`
+3. exactly one current-directory `*.skillspm.tgz`
 
-Use when:
+If multiple local packs exist, install fails closed.
 
-- install or sync fails
-- the user asks why something is not working
-- the environment needs a machine-readable diagnosis
+### `skillspm pack`
 
-### `skillspm sync`
+Bundle the current locked environment into a portable `.skillspm.tgz` pack.
 
-Use when:
+A pack contains:
 
-- installed Skills should be pushed to configured targets
-- the user asks to make the current Skills available in one or more agents
+- `skills.yaml`
+- `skills.lock`
+- internal `manifest.yaml`
+- `skills/` with exact cached skill payloads
 
-### `skillspm import --from <source>`
-
-Use when:
-
-- the user wants to adopt an existing Skills setup
-- the user wants to bring Skills in from OpenClaw or another supported source
-
-Typical follow-up after import:
-
-```bash
-skillspm install
-skillspm sync
-```
-
-### `skillspm inspect <path> --write`
-
-Use when:
-
-- a raw skill folder was created manually or by AI
-- a skill folder is missing metadata
-- the user wants to normalize a skill into a managed form
+`manifest.yaml` is internal pack metadata, not user-editable environment truth.
 
 ### `skillspm freeze`
 
-Use when:
+Rewrite `skills.lock` with exact resolved versions.
 
-- the user explicitly wants to update `skills.lock`
-- the installed environment should be frozen after changes
-- reproducibility is important and the resolved state should be recorded
+Do not run `freeze` automatically unless the task clearly requires updating the lockfile.
 
-Do not run `freeze` automatically unless the user asks, or the workflow clearly requires updating the lockfile.
+### `skillspm adopt`
+
+Discover existing skills and merge them into `skills.yaml`.
+
+Use this when the user wants to bring an existing setup under Phase-2 manifest management.
+
+### `skillspm sync`
+
+Sync locked skills from the local library cache to configured targets.
+
+By default, `sync` is non-destructive:
+
+- it updates the locked skill entries it manages
+- it does not prune unrelated target contents
+- it fails closed before writing if a target path escapes its allowed containment root
+
+### `skillspm doctor`
+
+Check manifest, lockfile, cache, and targets.
+
+Use `--json` when machine-readable diagnostics help the workflow.
+
+### `skillspm help`
+
+Use for the current command surface, flags, and examples.
 
 ## File responsibilities
 
 ### `skills.yaml`
 
-Defines the desired Skills environment.
+Defines the desired Skills environment for this project.
 
-It may declare:
-
-- root skills
-- local paths
-- declared sources
-- targets
-- optional settings such as `auto_sync`
-
-### `.skills/`
-
-This is the local installed workspace.
-
-It contains the installed results of `skillspm install`.
-
-Agents should understand:
-
-- sources are declared in `skills.yaml`
-- installed results live in `.skills/`
-- sync pushes from `.skills/` to target agents
+Agents should edit `skills.yaml` when changing root skills or targets.
 
 ### `skills.lock`
 
-This is the frozen resolved state.
+Stores the exact resolved versions for the environment.
 
-Agents should not edit `skills.lock` by hand unless explicitly asked.
+Agents should not hand-edit `skills.lock` unless explicitly asked.
 
-Preferred behavior:
-
-- `install` resolves
-- `freeze` writes lockfile
-
-### `skill.yaml`
-
-This is per-skill metadata, not the top-level environment definition.
-
-Agents may create or update it through:
-
-```bash
-skillspm inspect <path> --write
-```
-
-Do not treat `skill.yaml` as a replacement for `skills.yaml`.
-
-## Source rules
-
-`skillspm install` only installs Skills from sources declared in `skills.yaml`.
-
-Agents must not assume hidden or implicit sources.
-
-Current expected source patterns include:
-
-- local path entries
-- declared local source files
-- other explicitly declared sources supported by the current release
-
-Do not invent or substitute new sources unless the user explicitly asks.
-
-## Safe editing rules
+## Safe behavior
 
 Agents should prefer:
 
 - editing `skills.yaml` when changing the desired environment
-- running `skillspm install` after environment changes
-- running `skillspm freeze` only when the resolved state should be updated
+- running `skillspm install` after manifest changes
+- running `skillspm sync` only when target updates are intended
+- running `skillspm freeze` only when lockfile updates are part of the task
 
 Agents should avoid:
 
+- treating cache contents as the source of truth
 - hand-editing `skills.lock`
-- changing `.skills/` manually
-- rewriting source layouts without being asked
-- switching project/global scope without explicit instruction
-
-## Recommended default sequences
-
-### Set up this repository
-
-```bash
-skillspm install
-skillspm doctor --json
-```
-
-If targets are configured:
-
-```bash
-skillspm sync
-```
-
-### Add or normalize a raw skill folder
-
-```bash
-skillspm inspect ./path-to-skill --write
-skillspm install
-```
-
-### Adopt an existing setup
-
-```bash
-skillspm import --from openclaw
-skillspm install
-skillspm sync
-```
-
-### Update the frozen state
-
-```bash
-skillspm freeze
-```
+- changing machine-local cache contents directly
+- switching scope with `-g` unless the user explicitly asks
 
 ## Human override rule
 

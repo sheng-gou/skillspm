@@ -2,96 +2,99 @@
 
 This repository uses `skillspm` to manage a declarative Skills environment.
 
-## What this project is about
+## Phase 2 model in one view
 
-The source of truth is `skills.yaml`.
+Project truth lives in:
 
-`skillspm` is used to:
+- `skills.yaml`
+- `skills.lock`
 
-- install a Skills environment from `skills.yaml`
-- freeze the resolved state into `skills.lock`
-- sync installed Skills to one or more agents
-- import an existing setup
-- inspect a raw skill folder and turn it into a managed skill
+Machine-local cache lives in:
+
+- `~/.skillspm/library.yaml`
+- `~/.skillspm/skills/`
 
 In short:
 
 - `skills.yaml` = desired environment
-- `skills.lock` = frozen installed environment
-- `.skills/` = local installed workspace
+- `skills.lock` = exact resolved versions
+- `~/.skillspm/*` = machine-local cache used by `install`, `pack`, and `sync`
+
+The cache is not the source of truth for the project.
 
 ## Most important commands
 
-These are the main commands most humans should care about:
+These are the public Phase-2 commands to keep in mind:
 
 ```bash
+skillspm add
 skillspm install
+skillspm pack
 skillspm freeze
+skillspm adopt
 skillspm sync
-skillspm import --from openclaw
-skillspm inspect ./my-skill --write
+skillspm doctor
+skillspm help
 ```
 
-### What each one does
+## What each command does
 
-#### `skillspm install`
+### `skillspm add`
 
-Reads `skills.yaml`, resolves Skills from declared sources, and installs them into the local `.skills/` workspace.
+Adds a root skill entry to `skills.yaml`.
 
-Use this when:
+Use this when you want the project manifest to include a new skill id, version range, or local path.
 
-* setting up the project
-* applying changes made to `skills.yaml`
-* rebuilding the local managed environment
+### `skillspm install`
 
-#### `skillspm freeze`
+Resolves the declared environment and caches exact skills locally.
 
-Writes the currently resolved and installed state into `skills.lock`.
+Input precedence is:
 
-Use this when:
+1. explicit path to `skills.yaml` or `*.skillspm.tgz`
+2. current-scope `skills.yaml`
+3. exactly one current-directory `*.skillspm.tgz`
 
-* you want reproducibility
-* the resolved environment has changed
-* you want teammates or agents to get the same installed result later
+If multiple local packs exist, install fails closed.
 
-#### `skillspm sync`
+### `skillspm pack`
 
-Syncs the installed environment from `.skills/` to configured targets or a selected target.
+Bundles the current locked environment into a portable `.skillspm.tgz` file.
 
-Use this when:
+A pack contains:
 
-* you want the installed Skills available in OpenClaw / Codex / Claude Code
-* targets have already been configured
-* the local environment has changed and agents should receive the updated state
+- `skills.yaml`
+- `skills.lock`
+- internal `manifest.yaml`
+- `skills/` with exact cached skill payloads
 
-#### `skillspm import --from <source>`
+### `skillspm freeze`
 
-Imports an existing setup into the current managed environment.
+Rewrites `skills.lock` with exact resolved versions.
 
-Use this when:
+Use this when you intentionally want to record the current resolved state.
 
-* adopting an existing local or agent-based Skills setup
-* bringing Skills in from OpenClaw or another supported source
-* migrating an unmanaged setup into `skillspm`
+### `skillspm adopt`
 
-Typical follow-up:
+Discovers existing skills and merges them into `skills.yaml`.
 
-```bash
-skillspm import --from openclaw
-skillspm install
-skillspm sync
-```
+Use this when adopting an existing setup into the Phase-2 manifest model.
 
-#### `skillspm inspect <path> --write`
+### `skillspm sync`
 
-Generates or completes `skill.yaml` for a raw skill folder.
+Writes the currently locked skills into configured targets from the local library cache.
 
-Use this when:
+By default, sync is non-destructive: it updates managed locked entries and does not prune unrelated target contents.
 
-* a skill folder was created manually
-* a skill folder was created by AI
-* metadata is missing or incomplete
-* you want the folder to become a managed skill
+### `skillspm doctor`
+
+Checks manifest, lockfile, cache, and targets.
+
+Use `skillspm doctor --json` when you want machine-readable diagnostics.
+
+### `skillspm help`
+
+Shows the current command surface and flags.
 
 ## Typical workflows
 
@@ -99,26 +102,29 @@ Use this when:
 
 ```bash
 skillspm install
-skillspm sync
-skillspm freeze
+skillspm doctor
 ```
 
-### Import an existing setup
+If targets are configured and should be updated:
 
 ```bash
-skillspm import --from openclaw
-skillspm install
 skillspm sync
 ```
 
-### Normalize a raw skill folder
+### Add a new root skill
 
 ```bash
-skillspm inspect ./scratch/my-new-skill --write
+skillspm add ./skills/my-skill
 skillspm install
 ```
 
-### Update the frozen state
+### Create a portable pack
+
+```bash
+skillspm pack
+```
+
+### Record the resolved state
 
 ```bash
 skillspm freeze
@@ -128,103 +134,33 @@ skillspm freeze
 
 ### `skills.yaml`
 
-Defines the desired Skills environment.
+Defines the desired Skills environment for the project.
 
-Typical contents include:
-
-* root skills
-* local paths
-* declared sources
-* targets
-* optional settings
-
-You should edit `skills.yaml` when changing the desired environment.
+In the Phase-2 model it keeps root `skills` and `targets`.
 
 ### `skills.lock`
 
-Stores the frozen resolved state of the environment.
+Stores the exact resolved versions for the environment.
 
-In most cases, do not edit this file by hand.
-Use `skillspm freeze` to update it.
+In most cases, do not edit this file by hand. Use `skillspm freeze`.
 
-### `.skills/`
+## Source and scope rules
 
-Contains the local installed workspace managed by `skillspm`.
+`skillspm install` works from explicit manifest or pack input, or from the current-scope `skills.yaml`.
 
-In most cases, do not edit this directory manually.
+Do not treat the machine-local cache as a project workspace.
 
-## Source rules
-
-`skillspm install` only installs Skills from sources declared in `skills.yaml`.
-
-That means installation is explicit and reproducible.
-
-Current source patterns may include:
-
-* local paths
-* declared local source files
-* other explicitly declared sources supported by the current release
-
-Do not assume hidden or automatic sources.
-
-## Scope rules
-
-Default to project scope.
-
-That usually means:
-
-* read `./skills.yaml`
-* install into `./.skills/`
-* write `./skills.lock`
-
-Use `-g` only when you explicitly want the global environment.
-
-Examples:
-
-```bash
-skillspm install -g
-skillspm sync -g
-skillspm freeze -g
-```
-
-## Convenience commands
-
-These commands are useful, but they are not the core mental model:
-
-```bash
-skillspm init
-skillspm add
-skillspm remove
-skillspm list
-skillspm why
-skillspm snapshot
-skillspm doctor
-skillspm target add
-skillspm bootstrap
-```
-
-Use them as helpers around the main workflow, not as replacements for it.
+Use `-g` only when you explicitly want global scope.
 
 ## When changing this project
 
-If you change command behavior, manifests, or workflow semantics, please keep these files aligned:
+If you change command behavior or user-facing workflow, keep these files aligned:
 
-* `README.md`
-* `README.zh-CN.md`
-* `AGENTS.md`
-* `HUMAN.md`
-
-## Contribution notes
-
-When contributing:
-
-* prefer small, focused changes
-* keep command behavior explicit
-* avoid hidden magic
-* preserve the `skills.yaml` → install → freeze/sync model
-* update docs when changing user-facing behavior
+- `README.md`
+- `README.zh-CN.md`
+- `AGENTS.md`
+- `HUMAN.md`
 
 ## In one sentence
 
-Humans should think of `skillspm` as a way to manage a reproducible Skills environment centered on `skills.yaml`.
-
+Humans should think of `skillspm` as a reproducible Skills environment manager centered on `skills.yaml` and `skills.lock`, with a machine-local cache under `~/.skillspm/`.

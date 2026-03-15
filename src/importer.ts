@@ -3,23 +3,12 @@ import { readdir } from "node:fs/promises";
 import { CliError } from "./errors";
 import { resolveDefaultTargetPath } from "./adapter";
 import { createDefaultManifest, loadManifest } from "./manifest";
-import { resolveStateContainmentRoot } from "./scope";
 import type { ScopeLayout } from "./scope";
 import { loadSkillMetadata } from "./skill";
 import type { ManifestSkill, SkillsManifest, TargetType } from "./types";
-import {
-  assertPathWithinRootReal,
-  copyDir,
-  ensureDir,
-  exists,
-  isPathWithinRootReal,
-  normalizeRelativePath,
-  printInfo,
-  printWarning,
-  sanitizeSkillId
-} from "./utils";
+import { exists, isPathWithinRootReal, normalizeRelativePath, printInfo, printWarning } from "./utils";
 
-const SKIP_SCAN_DIRS = new Set([".git", ".skills", "dist", "node_modules", "vendor"]);
+const SKIP_SCAN_DIRS = new Set([".git", ".skillspm", ".skills", "dist", "node_modules", "vendor"]);
 
 interface ScanRoot {
   label: string;
@@ -35,14 +24,14 @@ export interface ImportResult {
 export async function importSkills(layout: ScopeLayout, commandCwd: string, from?: string): Promise<ImportResult> {
   const manifest = (await exists(path.join(layout.rootDir, "skills.yaml")))
     ? await loadManifest(layout.rootDir)
-    : createDefaultManifest(layout.scope === "global" ? "global" : path.basename(layout.rootDir));
+    : createDefaultManifest();
   const scanRoots = await resolveScanRoots(commandCwd, from);
   const discovered = new Map<string, ManifestSkill>();
   let warningCount = 0;
 
   for (const scanRoot of scanRoots) {
     printInfo(`Scanning ${scanRoot.label}...`);
-    for (const skill of await discoverSkillEntries(layout, scanRoot.path)) {
+    for (const skill of await discoverSkillEntries(layout.rootDir, scanRoot.path)) {
       if (!skill.version) {
         warningCount += 1;
       }
@@ -91,7 +80,7 @@ async function resolveExplicitScanRoot(cwd: string, from: string): Promise<ScanR
 
   const resolvedPath = path.resolve(cwd, from);
   if (!(await exists(resolvedPath))) {
-    throw new CliError(`Import path does not exist: ${from}`, 2);
+    throw new CliError(`Adopt path does not exist: ${from}`, 2);
   }
   return {
     label: normalizeRelativePath(cwd, resolvedPath),
@@ -99,20 +88,20 @@ async function resolveExplicitScanRoot(cwd: string, from: string): Promise<ScanR
   };
 }
 
-async function discoverSkillEntries(layout: ScopeLayout, rootPath: string): Promise<ManifestSkill[]> {
+async function discoverSkillEntries(rootDir: string, rootPath: string): Promise<ManifestSkill[]> {
   const discovered = new Map<string, ManifestSkill>();
-  await walkForSkills(layout, rootPath, rootPath, discovered);
+  await walkForSkills(rootDir, rootPath, rootPath, discovered);
   return [...discovered.values()];
 }
 
 async function walkForSkills(
-  layout: ScopeLayout,
+  rootDir: string,
   scanRootPath: string,
   currentPath: string,
   discovered: Map<string, ManifestSkill>
 ): Promise<void> {
   if (await isSkillRoot(currentPath)) {
-    const skill = await createManifestSkill(layout, currentPath);
+    const skill = await createManifestSkill(rootDir, currentPath);
     if (!discovered.has(skill.id)) {
       discovered.set(skill.id, skill);
     }
@@ -136,7 +125,7 @@ async function walkForSkills(
     if (entry.name.startsWith(".") && path.resolve(currentPath) === path.resolve(scanRootPath)) {
       continue;
     }
-    await walkForSkills(layout, scanRootPath, path.join(currentPath, entry.name), discovered);
+    await walkForSkills(rootDir, scanRootPath, path.join(currentPath, entry.name), discovered);
   }
 }
 
@@ -144,32 +133,15 @@ async function isSkillRoot(candidatePath: string): Promise<boolean> {
   return (await exists(path.join(candidatePath, "skill.yaml"))) || (await exists(path.join(candidatePath, "SKILL.md")));
 }
 
-async function createManifestSkill(layout: ScopeLayout, skillRoot: string): Promise<ManifestSkill> {
+async function createManifestSkill(rootDir: string, skillRoot: string): Promise<ManifestSkill> {
   const metadata = await loadSkillMetadata(skillRoot);
   const skillId = metadata?.id ?? `local/${path.basename(skillRoot)}`;
-  const manifestPath = (await isPathWithinRootReal(layout.rootDir, skillRoot))
-    ? skillRoot
-    : await vendorImportedSkill(layout, skillRoot, skillId);
-  const skill: ManifestSkill = {
+  const manifestPath = (await isPathWithinRootReal(rootDir, skillRoot))
+    ? normalizeRelativePath(rootDir, skillRoot)
+    : skillRoot;
+  return {
     id: skillId,
-    path: normalizeRelativePath(layout.rootDir, manifestPath)
+    path: manifestPath,
+    ...(metadata?.version ? { version: metadata.version } : {})
   };
-
-  if (metadata?.version) {
-    skill.version = metadata.version;
-  }
-
-  return skill;
-}
-
-async function vendorImportedSkill(layout: ScopeLayout, skillRoot: string, skillId: string): Promise<string> {
-  const vendoredPath = path.join(layout.importedRoot, sanitizeSkillId(skillId));
-  await assertPathWithinRootReal(
-    resolveStateContainmentRoot(layout),
-    vendoredPath,
-    `imported skill vendor path ${vendoredPath}`
-  );
-  await ensureDir(layout.importedRoot);
-  await copyDir(skillRoot, vendoredPath, { dereference: true });
-  return vendoredPath;
 }

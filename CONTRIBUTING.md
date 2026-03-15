@@ -2,7 +2,7 @@
 
 Thanks for contributing to SkillsPM.
 
-SkillsPM is a declarative Skills environment manager built around `skills.yaml` as the source of truth and `skills.lock` as the frozen resolved state.
+SkillsPM is a declarative Skills environment manager built around `skills.yaml` as project truth and `skills.lock` as the frozen resolved state.
 
 This project is still early. Clear bug reports, small focused pull requests, and practical feedback are especially valuable.
 
@@ -37,14 +37,17 @@ npm test
 
 When contributing, please keep these principles in mind:
 
-- `skills.yaml` is the source of truth for the desired environment
-- `skills.lock` represents the frozen installed state
-- core user workflow should stay easy to understand:
+- `skills.yaml` and `skills.lock` define the project environment contract
+- machine-local cache lives under `~/.skillspm/` and is not project truth
+- public command docs must stay aligned to the current Phase-2 command surface:
+  - `add`
   - `install`
+  - `pack`
   - `freeze`
+  - `adopt`
   - `sync`
-  - `import`
-  - `inspect`
+  - `doctor`
+  - `help`
 - README wording should stay aligned with actual CLI behavior
 - agent-facing behavior should stay aligned with [AGENTS.md](AGENTS.md)
 
@@ -55,7 +58,7 @@ Please make sure your change:
 - is focused on one problem or one improvement
 - includes tests when command behavior changes
 - keeps README examples accurate
-- updates [AGENTS.md](AGENTS.md) if agent-facing behavior changes
+- updates [AGENTS.md](AGENTS.md) and [HUMAN.md](HUMAN.md) if user-facing behavior changes
 - does not introduce unrelated breaking changes
 
 ## Pull request guidelines
@@ -65,7 +68,7 @@ When opening a PR, please include:
 - what changed
 - why it changed
 - how it was tested
-- whether `README.md`, [AGENTS.md](AGENTS.md), examples, or `README.zh-CN.md` were updated
+- whether `README.md`, `README.zh-CN.md`, [AGENTS.md](AGENTS.md), or [HUMAN.md](HUMAN.md) were updated
 
 Small PRs are preferred over large PRs.
 
@@ -102,6 +105,7 @@ Please keep documentation:
 - command-first
 - consistent with the current implementation
 - honest about current limitations
+- aligned with the current README contract for manifests, lockfiles, packs, cache, and targets
 
 ## Agent-facing instructions
 
@@ -112,6 +116,7 @@ If your change affects agent workflows, please also review:
 - [README.md](README.md)
 - [README.zh-CN.md](README.zh-CN.md)
 - [AGENTS.md](AGENTS.md)
+- [HUMAN.md](HUMAN.md)
 
 ## Code of conduct
 

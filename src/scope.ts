@@ -6,28 +6,22 @@ export type SkillsScope = "project" | "global";
 export interface ScopeLayout {
   scope: SkillsScope;
   rootDir: string;
-  stateDir: string;
-  installedRoot: string;
-  importedRoot: string;
+  cacheDir: string;
+  libraryFile: string;
+  librarySkillsDir: string;
 }
 
 export function resolveScopeLayout(cwd: string, useGlobal = false): ScopeLayout {
-  const rootDir = useGlobal ? path.join(os.homedir(), ".skills") : cwd;
-  const stateDir = useGlobal ? rootDir : path.join(rootDir, ".skills");
-
+  const cacheDir = path.join(os.homedir(), ".skillspm");
   return {
     scope: useGlobal ? "global" : "project",
-    rootDir,
-    stateDir,
-    installedRoot: path.join(stateDir, "installed"),
-    importedRoot: path.join(stateDir, "imported")
+    rootDir: useGlobal ? path.join(cacheDir, "global") : cwd,
+    cacheDir,
+    libraryFile: path.join(cacheDir, "library.yaml"),
+    librarySkillsDir: path.join(cacheDir, "skills")
   };
 }
 
 export function formatScopeLabel(scope: SkillsScope): string {
-  return scope === "global" ? "global (~/.skills)" : "project";
-}
-
-export function resolveStateContainmentRoot(layout: ScopeLayout): string {
-  return layout.scope === "global" ? layout.stateDir : layout.rootDir;
+  return scope === "global" ? "global (~/.skillspm/global)" : "project";
 }

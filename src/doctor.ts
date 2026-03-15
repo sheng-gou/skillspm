@@ -1,19 +1,12 @@
 import path from "node:path";
 import { resolveDefaultTargetPath } from "./adapter";
+import { loadLibrary, resolveCachedSkillPath } from "./library";
 import { loadLockfile } from "./lockfile";
 import { loadManifest } from "./manifest";
 import type { ScopeLayout } from "./scope";
 import { loadSkillMetadata, resolveSkillMarkdownPath } from "./skill";
 import type { ManifestTarget } from "./types";
-import {
-  buildInstalledEntryName,
-  detectPlatformOs,
-  exists,
-  printInfo,
-  printWarning,
-  resolveCleanupRoot,
-  resolveFileUrlOrPath
-} from "./utils";
+import { detectPlatformOs, exists, printInfo, printWarning, resolveCleanupRoot, resolveFileUrlOrPath } from "./utils";
 
 export interface DoctorFinding {
   level: "info" | "warning" | "error";
@@ -25,9 +18,9 @@ export interface DoctorFinding {
 export interface DoctorReport {
   scope: ScopeLayout["scope"];
   rootDir: string;
-  installedRoot: string;
+  libraryFile: string;
   rootSkillCount: number;
-  resolvedSkillCount: number;
+  lockedSkillCount: number;
   warningCount: number;
   errorCount: number;
   result: "healthy" | "warnings" | "failed";
@@ -70,7 +63,7 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
   const findings: DoctorFinding[] = [];
   let warningCount = 0;
   let errorCount = 0;
-  let resolvedSkillCount = 0;
+  let lockedSkillCount = 0;
 
   const currentOs = detectPlatformOs();
   const manifest = await loadManifest(layout.rootDir);
@@ -81,6 +74,10 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
   findings.push({
     level: "info",
     message: `host platform detected: ${currentOs}`
+  });
+  findings.push({
+    level: "info",
+    message: `machine-local library: ${layout.libraryFile}`
   });
 
   const enabledTargets = (manifest.targets ?? [{ type: "openclaw" as const }]).filter((target) => target.enabled !== false);
@@ -100,57 +97,58 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
     warningCount += 1;
     findings.push({
       level: "warning",
-      message: `no skills.lock found; run \`skillspm install${layout.scope === "global" ? " -g" : ""}\` to resolve dependencies`
+      message: `no skills.lock found; run \`skillspm install${layout.scope === "global" ? " -g" : ""}\` or \`skillspm freeze${layout.scope === "global" ? " -g" : ""}\``
     });
   } else {
-    resolvedSkillCount = Object.keys(lockfile.resolved).length;
+    const library = await loadLibrary(layout);
+    lockedSkillCount = Object.keys(lockfile.skills).length;
     findings.push({
       level: "info",
-      message: `${resolvedSkillCount} skills resolved`
+      message: `${lockedSkillCount} skills locked`
     });
 
-    for (const [skillId, node] of Object.entries(lockfile.resolved)) {
-      const installDir = path.join(layout.installedRoot, buildInstalledEntryName(skillId, node.version));
-      if (!(await exists(installDir))) {
+    for (const [skillId, version] of Object.entries(lockfile.skills)) {
+      const cachedPath = await resolveCachedSkillPath(layout, library, skillId, version);
+      if (!cachedPath) {
         errorCount += 1;
         findings.push({
           level: "error",
-          message: `installed directory missing for ${skillId}: ${installDir}`,
+          message: `cached directory missing for ${skillId}@${version}`,
           skillId,
-          path: installDir
+          path: path.join(layout.librarySkillsDir, `${skillId}@${version}`)
         });
         continue;
       }
 
-      const metadata = await loadSkillMetadata(installDir);
+      const metadata = await loadSkillMetadata(cachedPath);
       if (!metadata) {
         warningCount += 1;
         findings.push({
           level: "warning",
-          message: `missing skill.yaml in ${installDir}`,
+          message: `missing skill.yaml in ${cachedPath}`,
           skillId,
-          path: installDir
+          path: cachedPath
         });
       }
 
-      const skillMarkdownPath = await resolveSkillMarkdownPath(installDir, metadata);
+      const skillMarkdownPath = await resolveSkillMarkdownPath(cachedPath, metadata);
       if (!skillMarkdownPath) {
         errorCount += 1;
         findings.push({
           level: "error",
-          message: `missing SKILL.md in ${installDir}`,
+          message: `missing SKILL.md in ${cachedPath}`,
           skillId,
-          path: installDir
+          path: cachedPath
         });
       }
 
-      if (node.version === "unversioned") {
+      if (version === "unversioned") {
         warningCount += 1;
         findings.push({
           level: "warning",
           message: `${skillId} has no version metadata`,
           skillId,
-          path: installDir
+          path: cachedPath
         });
       }
 
@@ -162,7 +160,7 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
             level: "warning",
             message: `missing binary ${binary} required by ${skillId}`,
             skillId,
-            path: installDir
+            path: cachedPath
           });
         }
       }
@@ -175,7 +173,7 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
             level: "warning",
             message: `missing env var ${envVar} for ${skillId}`,
             skillId,
-            path: installDir
+            path: cachedPath
           });
         }
       }
@@ -187,7 +185,7 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
           level: "warning",
           message: `${skillId} does not list ${currentOs} in compatibility.os`,
           skillId,
-          path: installDir
+          path: cachedPath
         });
       }
     }
@@ -196,9 +194,9 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
   return {
     scope: layout.scope,
     rootDir: layout.rootDir,
-    installedRoot: layout.installedRoot,
+    libraryFile: layout.libraryFile,
     rootSkillCount: manifest.skills.length,
-    resolvedSkillCount,
+    lockedSkillCount,
     warningCount,
     errorCount,
     result: errorCount > 0 ? "failed" : warningCount > 0 ? "warnings" : "healthy",
@@ -244,7 +242,7 @@ async function collectTargetCompatibilityFindings(
     warningCount += 1;
     findings.push({
       level: "warning",
-      message: `codex target is enabled but the codex binary was not found in PATH on this host`,
+      message: "codex target is enabled but the codex binary was not found in PATH on this host",
       path: resolvedPath
     });
   }
@@ -253,7 +251,16 @@ async function collectTargetCompatibilityFindings(
     warningCount += 1;
     findings.push({
       level: "warning",
-      message: `claude_code target is enabled but the claude binary was not found in PATH on this host`,
+      message: "claude_code target is enabled but the claude binary was not found in PATH on this host",
+      path: resolvedPath
+    });
+  }
+
+  if (!(await exists(resolvedPath))) {
+    warningCount += 1;
+    findings.push({
+      level: "warning",
+      message: `target path does not exist yet: ${resolvedPath}`,
       path: resolvedPath
     });
   }
@@ -262,12 +269,10 @@ async function collectTargetCompatibilityFindings(
 }
 
 async function commandExists(binary: string): Promise<boolean> {
-  const paths = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  for (const dir of paths) {
-    const candidate = path.join(dir, binary);
-    if (await exists(candidate)) {
-      return true;
-    }
-  }
-  return false;
+  const { spawn } = await import("node:child_process");
+  return await new Promise<boolean>((resolve) => {
+    const child = spawn("sh", ["-lc", `command -v ${binary}`], { stdio: "ignore" });
+    child.once("exit", (code) => resolve(code === 0));
+    child.once("error", () => resolve(false));
+  });
 }

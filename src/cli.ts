@@ -1,316 +1,163 @@
 import { Command } from "commander";
-import semver from "semver";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFile, writeFile } from "node:fs/promises";
-import { stringify as stringifyYaml } from "yaml";
 import { syncTargets } from "./adapter";
-import { loadLockfile } from "./lockfile";
 import { runDoctor } from "./doctor";
 import { CliError } from "./errors";
-import { buildInspectReport, renderInspectText } from "./inspect-report";
 import { importSkills } from "./importer";
 import { installProject } from "./installer";
-import { createDefaultManifest, loadManifest, saveManifest } from "./manifest";
-import { buildListReport, buildSnapshotReport, freezeInstalledState, renderSnapshotText } from "./report";
+import { loadLockfile, writeLockfile } from "./lockfile";
+import { createDefaultManifest, loadManifest, loadManifestFromPath, saveManifest } from "./manifest";
+import { extractPack } from "./pack";
+import { packProject } from "./packer";
 import { resolveProject } from "./resolver";
-import { formatScopeLabel, resolveScopeLayout, resolveStateContainmentRoot } from "./scope";
-import type { ScopeLayout } from "./scope";
-import { loadSkillMetadata, validateSkillMetadata } from "./skill";
-import type { ManifestSource, ManifestTarget, SkillMetadata, SkillsLock, SkillsManifest, TargetType } from "./types";
+import { formatScopeLabel, resolveScopeLayout } from "./scope";
+import { loadSkillMetadata } from "./skill";
+import type { ManifestSkill, SkillsManifest } from "./types";
 import {
   MANIFEST_FILE,
-  assertConfiguredPathWithinRootReal,
-  assertPathWithinRootReal,
   ensureDir,
   exists,
-  formatSkillVersion,
   isDirectory,
+  isPathWithinRootReal,
   normalizeRelativePath,
   printError,
   printInfo,
   printSuccess,
-  resolveFileUrlOrPath,
-  writeYamlDocument
+  resolveFileUrlOrPath
 } from "./utils";
 
+interface InstallSelection {
+  kind: "manifest" | "pack";
+  path: string;
+}
+
+const PUBLIC_COMMANDS = ["add", "install", "pack", "freeze", "adopt", "sync", "doctor", "help"] as const;
+const REMOVED_PUBLIC_COMMANDS = new Set(["import", "inspect"]);
+
 export async function runCli(argv: string[]): Promise<number> {
-  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
-    printInfo(renderHelp());
-    return 0;
-  }
-  if (argv.length >= 2 && (argv[1] === "--help" || argv[1] === "-h")) {
-    printInfo(renderHelp(argv[0]));
-    return 0;
-  }
-
-  const program = new Command();
-  program.name("skillspm").description("Manage declarative, reproducible Skills environments");
-
-  withScopeOption(
-    program
-      .command("init")
-      .description("Create a starter skills.yaml for the selected scope")
-      .option("--force", "Overwrite existing skills.yaml")
-  ).action(async (options: { force?: boolean; global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const manifestPath = path.join(layout.rootDir, MANIFEST_FILE);
-    if ((await exists(manifestPath)) && !options.force) {
-      throw new CliError(`skills.yaml already exists for ${formatScopeLabel(layout.scope)}. Run \`skillspm init${layout.scope === "global" ? " -g" : ""} --force\` to overwrite it.`, 2);
+  try {
+    if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
+      printInfo(renderHelp());
+      return 0;
+    }
+    if (argv[0] === "help") {
+      printInfo(renderHelp(resolvePublicCommand(argv[1])));
+      return 0;
+    }
+    if (argv.length >= 2 && (argv[1] === "--help" || argv[1] === "-h")) {
+      printInfo(renderHelp(resolvePublicCommand(argv[0])));
+      return 0;
+    }
+    if (REMOVED_PUBLIC_COMMANDS.has(argv[0])) {
+      throw new CliError(`Unknown command ${argv[0]}. Run \`skillspm help\` for public commands.`, 2);
     }
 
-    await ensureDir(layout.rootDir);
-    const manifest = createDefaultManifest(layout.scope === "global" ? "global" : path.basename(layout.rootDir));
-    await saveManifest(layout.rootDir, manifest);
-    await assertPathWithinRootReal(resolveStateContainmentRoot(layout), layout.stateDir, `state root ${layout.stateDir}`);
-    await ensureDir(layout.stateDir);
-    if (layout.scope === "global") {
-      await assertPathWithinRootReal(resolveStateContainmentRoot(layout), layout.installedRoot, `installed root ${layout.installedRoot}`);
-      await ensureDir(layout.installedRoot);
-    } else {
-      await ensureGitignoreContains(layout.rootDir, ".skills/");
-    }
+    const program = new Command();
+    program.name("skillspm").description("Manage declarative, reproducible Skills environments");
 
-    printSuccess(`Initialized Skills ${layout.scope} scope`);
-    printInfo(`  - manifest: ${manifestPath}`);
-    printInfo(`  - state: ${layout.stateDir}`);
-    if (layout.scope === "global") {
-      printInfo(`  - installed: ${layout.installedRoot}`);
-    }
-  });
-
-  withScopeOption(
-    program
-      .command("add")
-      .description("Add a root skill to skills.yaml")
-      .argument("<skill>", "Skill id@range or local path")
-      .option("--source <name>", "Source name for index-backed skills")
-      .option("--install", "Run install after writing skills.yaml")
-  ).action(async (input: string, options: { source?: string; install?: boolean; global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const manifest = await loadManifest(layout.rootDir);
-    const nextManifest = await addSkillToManifest(process.cwd(), layout, manifest, input, options.source);
-    await saveManifest(layout.rootDir, nextManifest);
-    const added = nextManifest.skills[nextManifest.skills.length - 1];
-    printSuccess(`Added skill ${describeManifestSkill(added)} to ${layout.scope} skills.yaml`);
-    if (options.install) {
-      await runInstallCommand(layout);
-    }
-  });
-
-  withScopeOption(
-    program
-      .command("remove")
-      .description("Remove a root skill from skills.yaml")
-      .argument("<skill>", "Root skill id or local path")
-  ).action(async (input: string, options: { global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const manifest = await loadManifest(layout.rootDir);
-    const { nextManifest, removed } = await removeSkillFromManifest(process.cwd(), layout, manifest, input);
-    await saveManifest(layout.rootDir, nextManifest);
-    printSuccess(`Removed skill ${describeManifestSkill(removed)} from ${layout.scope} skills.yaml`);
-  });
-
-  withScopeOption(
-    program
-      .command("install")
-      .description("Resolve and install skills into the selected scope")
-  ).action(async (options: { global?: boolean }) => {
-    await runInstallCommand(resolveScopeLayout(process.cwd(), options.global));
-  });
-
-  withScopeOption(
-    program
-      .command("update")
-      .description("Refresh installed skills from the current manifest")
-      .argument("[skill]", "Optional root skill id or local path")
-      .option("--to <version>", "Pin the selected index-backed root skill to an exact version")
-  ).action(
-    async (
-      skillOrOptions: string | { to?: string; global?: boolean } | undefined,
-      options?: { to?: string; global?: boolean }
-    ) => {
-      const input = typeof skillOrOptions === "string" ? skillOrOptions : undefined;
-      const normalizedOptions = typeof skillOrOptions === "string" ? options ?? {} : skillOrOptions ?? {};
-      const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
-      await runUpdateCommand(process.cwd(), layout, input, normalizedOptions);
-    }
-  );
-
-  withScopeOption(
-    program
-      .command("bootstrap")
-      .description("Install, optionally auto-sync, then run doctor")
-  ).action(async (options: { global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    await runInstallCommand(layout);
-    const exitCode = await runDoctor(layout);
-    if (exitCode !== 0) {
-      process.exitCode = exitCode;
-    }
-  });
-
-  withScopeOption(
-    program
-      .command("freeze")
-      .description("Rewrite skills.lock from the currently installed state")
-  ).action(async (options: { global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const lockfile = await freezeInstalledState(layout);
-    printSuccess(`Updated skills.lock from installed state (${Object.keys(lockfile.resolved).length} skill${Object.keys(lockfile.resolved).length === 1 ? "" : "s"})`);
-  });
-
-  withScopeOption(
-    program
-      .command("import")
-      .description("Discover existing skills and merge them into skills.yaml")
-      .option("--from <source>", "Scan openclaw, codex, claude_code, or a local path")
-  ).action(async (options: { from?: string; global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const result = await importSkills(layout, process.cwd(), options.from);
-    await saveManifest(layout.rootDir, result.manifest);
-    printSuccess(`Imported ${result.importedCount} skill${result.importedCount === 1 ? "" : "s"} into ${layout.scope} skills.yaml`);
-  });
-
-  withScopeOption(
-    program
-      .command("doctor")
-      .description("Check skills health")
-      .option("--json", "Emit a machine-readable report")
-  ).action(async (options: { json?: boolean; global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const exitCode = await runDoctor(layout, { json: options.json });
-    if (exitCode !== 0) {
-      process.exitCode = exitCode;
-    }
-  });
-
-  withScopeOption(
-    program
-      .command("list")
-      .description("List root or resolved skills")
-      .option("--resolved", "Show the full resolved set")
-      .option("--json", "Emit a machine-readable report")
-  ).action(async (options: { resolved?: boolean; json?: boolean; global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const report = await buildListReport(layout, { resolved: options.resolved });
-
-    if (options.json) {
-      emitJson(report);
-      return;
-    }
-
-    printInfo(`${report.view === "resolved" ? "Resolved" : "Root"} skills (${formatScopeLabel(report.scope)})`);
-    for (const skill of report.skills) {
-      process.stdout.write(`- ${renderListSkillText(skill)}\n`);
-    }
-  });
-
-  withScopeOption(
-    program
-      .command("snapshot")
-      .description("Summarize the selected skills environment")
-      .option("--resolved", "Resolve dependencies live instead of preferring skills.lock")
-      .option("--json", "Emit a machine-readable snapshot")
-  ).action(async (options: { resolved?: boolean; json?: boolean; global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const snapshot = await buildSnapshotReport(layout, { resolved: options.resolved });
-
-    if (options.json) {
-      emitJson(snapshot);
-      return;
-    }
-
-    printInfo(renderSnapshotText(snapshot));
-  });
-
-  withScopeOption(
-    program
-      .command("why")
-      .description("Explain why a skill is installed")
-      .argument("<skill>", "Skill id")
-  ).action(async (skillId: string, options: { global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const manifest = await loadManifest(layout.rootDir);
-    const root = manifest.skills.find((skill) => skill.id === skillId);
-    if (root) {
-      printInfo(`${skillId} is a root dependency declared in ${layout.scope} skills.yaml`);
-      return;
-    }
-
-    const resolution = await resolveProject(layout.rootDir);
-    if (!resolution.nodes.has(skillId)) {
-      throw new CliError(`${skillId} is not part of this ${layout.scope} scope`, 1);
-    }
-
-    const chain = findWhyChain(resolution.manifest, resolution.rootSkillIds, resolution.nodes, skillId);
-    if (chain.length === 0) {
-      throw new CliError(`Unable to determine why ${skillId} is installed`, 1);
-    }
-
-    printInfo(`${skillId} is installed because:`);
-    printInfo("");
-    printInfo(chain.join(" -> "));
-  });
-
-  withScopeOption(
-    program
-      .command("sync")
-      .description("Sync installed skills to target directories")
-      .argument("[target]", "Target type")
-      .option("--mode <mode>", "Sync mode: copy or symlink")
-  ).action(async (targetOrOptions: string | { mode?: string; global?: boolean } | undefined, options?: { mode?: string; global?: boolean }) => {
-    const target = typeof targetOrOptions === "string" ? targetOrOptions : undefined;
-    const normalizedOptions = typeof targetOrOptions === "string" ? options ?? {} : targetOrOptions ?? {};
-    const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
-    const manifest = await loadManifest(layout.rootDir);
-    await syncTargets(layout, manifest, { targetType: target, mode: normalizedOptions.mode });
-  });
-
-  withScopeOption(
-    program
-      .command("target")
-      .description("Manage sync targets")
-      .argument("<action>", "Action to run. Supported: add")
-      .argument("[target]", "Target type: openclaw, codex, claude_code, or generic")
-      .option("--path <path>", "Set an explicit target path")
-  ).action(async (action: string, input: string | undefined, options: { global?: boolean; path?: string }) => {
-    if (action !== "add") {
-      throw new CliError(`Unknown target action ${action}. Supported: add.`, 2);
-    }
-    if (!input) {
-      throw new CliError("Missing target. Use openclaw, codex, claude_code, or generic.", 2);
-    }
-
-    const layout = resolveScopeLayout(process.cwd(), options.global);
-    const manifest = await loadManifest(layout.rootDir);
-    const targetType = parseTargetType(input);
-    const targetPath = options.path ? await normalizeTargetPath(process.cwd(), layout, options.path) : undefined;
-    if (targetType === "generic" && !targetPath) {
-      throw new CliError("Target generic requires --path.", 2);
-    }
-
-    const { nextManifest, changed, updated } = addTargetToManifest(manifest, { type: targetType, path: targetPath });
-    if (!changed) {
-      printInfo(`Target ${targetType} already exists in ${layout.scope} skills.yaml`);
-      return;
-    }
-    await saveManifest(layout.rootDir, nextManifest);
-    printSuccess(`${updated ? "Updated" : "Added"} target ${targetType} in ${layout.scope} skills.yaml`);
-  });
-
-  program
-    .command("inspect")
-    .description("Inspect a local skill directory and generate minimal metadata")
-    .argument("<path>", "Skill directory")
-    .option("--write", "Write or update skill.yaml in the target directory")
-    .option("--set-version <version>", "Override the generated version")
-    .option("--json", "Emit a machine-readable report")
-    .action(async (input: string, options: { write?: boolean; setVersion?: string; json?: boolean }) => {
-      await inspectSkill(process.cwd(), input, options);
+    withScopeOption(
+      program
+        .command("add")
+        .description("Add a root skill to skills.yaml")
+        .argument("<skill>", "Skill id[@range] or local path")
+        .option("--install", "Run install after writing skills.yaml")
+    ).action(async (input: string, options: { install?: boolean; global?: boolean }) => {
+      const layout = resolveScopeLayout(process.cwd(), options.global);
+      const manifest = await loadManifestOrDefault(layout.rootDir);
+      const nextManifest = await addSkillToManifest(process.cwd(), layout.rootDir, manifest, input);
+      await saveManifest(layout.rootDir, nextManifest);
+      const added = nextManifest.skills[nextManifest.skills.length - 1];
+      printSuccess(`Added ${describeManifestSkill(added)} to ${formatScopeLabel(layout.scope)} skills.yaml`);
+      if (options.install) {
+        await runInstallCommand(layout);
+      }
     });
 
-  try {
+    withScopeOption(
+      program
+        .command("install")
+        .description("Resolve a skills environment and cache exact skills locally")
+        .argument("[input]", "Explicit path to skills.yaml or *.skillspm.tgz")
+    ).action(async (inputOrOptions: string | { global?: boolean } | undefined, options?: { global?: boolean }) => {
+      const input = typeof inputOrOptions === "string" ? inputOrOptions : undefined;
+      const normalizedOptions = typeof inputOrOptions === "string" ? options ?? {} : inputOrOptions ?? {};
+      const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
+      await runInstallCommand(layout, input);
+    });
+
+    withScopeOption(
+      program
+        .command("pack")
+        .description("Bundle the current locked environment into a portable pack")
+        .argument("[out]", "Output .skillspm.tgz file")
+    ).action(async (outOrOptions: string | { global?: boolean } | undefined, options?: { global?: boolean }) => {
+      const out = typeof outOrOptions === "string" ? outOrOptions : undefined;
+      const normalizedOptions = typeof outOrOptions === "string" ? options ?? {} : outOrOptions ?? {};
+      const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
+      const outFile = await normalizePackOutputPath(process.cwd(), out ?? `${path.basename(layout.rootDir)}.skillspm.tgz`);
+      await packProject(layout, outFile);
+    });
+
+    withScopeOption(
+      program
+        .command("freeze")
+        .description("Rewrite skills.lock with exact resolved versions")
+    ).action(async (options: { global?: boolean }) => {
+      const layout = resolveScopeLayout(process.cwd(), options.global);
+      const resolution = await resolveProject(layout.rootDir);
+      const lockfile = {
+        schema: "skills-lock/v2" as const,
+        skills: Object.fromEntries(
+          [...resolution.nodes.values()]
+            .sort((left, right) => left.id.localeCompare(right.id))
+            .map((node) => [node.id, node.version])
+        )
+      };
+      await writeLockfile(layout.rootDir, lockfile);
+      printSuccess(`Updated skills.lock (${Object.keys(lockfile.skills).length} skill${Object.keys(lockfile.skills).length === 1 ? "" : "s"})`);
+    });
+
+    withScopeOption(
+      program
+        .command("adopt")
+        .description("Discover existing skills and merge them into skills.yaml")
+        .option("--from <source>", "Scan openclaw, codex, claude_code, or a local path")
+    ).action(async (options: { from?: string; global?: boolean }) => {
+      const layout = resolveScopeLayout(process.cwd(), options.global);
+      const result = await importSkills(layout, process.cwd(), options.from);
+      await saveManifest(layout.rootDir, result.manifest);
+      printSuccess(`Adopted ${result.importedCount} skill${result.importedCount === 1 ? "" : "s"} into ${formatScopeLabel(layout.scope)} skills.yaml`);
+    });
+
+    withScopeOption(
+      program
+        .command("sync")
+        .description("Sync locked skills from the local library cache to targets")
+        .argument("[target]", "Target type")
+        .option("--mode <mode>", "Sync mode: copy or symlink")
+    ).action(async (targetOrOptions: string | { mode?: string; global?: boolean } | undefined, options?: { mode?: string; global?: boolean }) => {
+      const target = typeof targetOrOptions === "string" ? targetOrOptions : undefined;
+      const normalizedOptions = typeof targetOrOptions === "string" ? options ?? {} : targetOrOptions ?? {};
+      const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
+      const manifest = await loadManifest(layout.rootDir);
+      await syncTargets(layout, manifest, { targetType: target, mode: normalizedOptions.mode });
+      printSuccess("Sync complete");
+    });
+
+    withScopeOption(
+      program
+        .command("doctor")
+        .description("Check manifest, lockfile, cache, and targets")
+        .option("--json", "Emit a machine-readable report")
+    ).action(async (options: { json?: boolean; global?: boolean }) => {
+      const layout = resolveScopeLayout(process.cwd(), options.global);
+      const exitCode = await runDoctor(layout, { json: options.json });
+      if (exitCode !== 0) {
+        process.exitCode = exitCode;
+      }
+    });
+
     await program.parseAsync(argv, { from: "user" });
     return process.exitCode ?? 0;
   } catch (error) {
@@ -324,490 +171,143 @@ export async function runCli(argv: string[]): Promise<number> {
 }
 
 function withScopeOption(command: Command): Command {
-  return command.option("-g, --global", "Use ~/.skills instead of the current project");
+  return command.option("-g, --global", "Use ~/.skillspm/global instead of the current project");
+}
+
+async function runInstallCommand(layout: ReturnType<typeof resolveScopeLayout>, input?: string): Promise<void> {
+  const selection = await selectInstallInput(process.cwd(), layout, input);
+
+  if (selection.kind === "manifest") {
+    const rootDir = path.dirname(selection.path);
+    const manifest = await loadManifestFromPath(selection.path);
+    await installProject({ ...layout, rootDir }, { manifest, lockfile: await loadLockfile(rootDir) });
+    return;
+  }
+
+  const pack = await extractPack(selection.path);
+  try {
+    await installProject(
+      { ...layout, rootDir: pack.rootDir },
+      {
+        manifest: pack.skillsManifest,
+        lockfile: pack.lockfile,
+        pack,
+        writeLockfile: false
+      }
+    );
+  } finally {
+    await pack.cleanup();
+  }
+}
+
+async function selectInstallInput(
+  commandCwd: string,
+  layout: ReturnType<typeof resolveScopeLayout>,
+  explicitInput?: string
+): Promise<InstallSelection> {
+  if (explicitInput) {
+    const resolvedPath = resolveFileUrlOrPath(commandCwd, explicitInput);
+    if (path.basename(resolvedPath) === MANIFEST_FILE) {
+      return { kind: "manifest", path: resolvedPath };
+    }
+    if (resolvedPath.endsWith(".skillspm.tgz")) {
+      return { kind: "pack", path: resolvedPath };
+    }
+    throw new CliError("install input must be an explicit path to skills.yaml or a *.skillspm.tgz pack", 2);
+  }
+
+  const manifestPath = path.join(layout.rootDir, MANIFEST_FILE);
+  if (await exists(manifestPath)) {
+    return { kind: "manifest", path: manifestPath };
+  }
+
+  const entries = await listLocalPacks(commandCwd);
+  if (entries.length === 1) {
+    return { kind: "pack", path: entries[0] };
+  }
+  if (entries.length > 1) {
+    throw new CliError("Multiple local *.skillspm.tgz files found. Pass the pack path explicitly.", 2);
+  }
+
+  throw new CliError("No install input found. Pass skills.yaml or a *.skillspm.tgz pack, or run inside a project with skills.yaml.", 2);
+}
+
+async function listLocalPacks(cwd: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const entries = await readdir(cwd, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".skillspm.tgz"))
+    .map((entry) => path.join(cwd, entry.name))
+    .sort((left, right) => left.localeCompare(right));
 }
 
 async function addSkillToManifest(
   commandCwd: string,
-  layout: ScopeLayout,
+  manifestRoot: string,
   manifest: SkillsManifest,
-  input: string,
-  sourceName?: string
+  input: string
 ): Promise<SkillsManifest> {
   const parsed = looksLikePath(input) ? undefined : parseSkillSpecifier(input);
   const nextSkills = manifest.skills.filter((skill) => skill.id !== parsed?.id);
 
   if (looksLikePath(input)) {
     const absolutePath = resolveFileUrlOrPath(commandCwd, input);
-    await assertConfiguredPathWithinRootReal(layout.rootDir, input, absolutePath, `local skill path ${input}`);
     if (!(await exists(absolutePath))) {
       throw new CliError(`Local skill path does not exist: ${input}`, 2);
     }
     const metadata = await loadSkillMetadata(absolutePath);
     const inferredId = metadata?.id ?? `local/${path.basename(absolutePath)}`;
     const withoutExisting = nextSkills.filter((skill) => skill.id !== inferredId);
-    withoutExisting.push({ id: inferredId, path: normalizeRelativePath(layout.rootDir, absolutePath) });
+    withoutExisting.push({
+      id: inferredId,
+      path: await toManifestPath(manifestRoot, absolutePath)
+    });
     return {
       ...manifest,
       skills: withoutExisting
     };
   }
 
-  const skill = { id: parsed.id } as SkillsManifest["skills"][number];
-  if (parsed.version) {
-    skill.version = parsed.version;
-  }
-  if (sourceName) {
-    skill.source = sourceName;
-  }
-  nextSkills.push(skill);
-
+  nextSkills.push({
+    id: parsed!.id,
+    ...(parsed!.version ? { version: parsed!.version } : {})
+  });
   return {
     ...manifest,
     skills: nextSkills
   };
 }
 
-async function removeSkillFromManifest(
-  commandCwd: string,
-  layout: ScopeLayout,
-  manifest: SkillsManifest,
-  input: string
-): Promise<{ nextManifest: SkillsManifest; removed: SkillsManifest["skills"][number] }> {
-  let removed: SkillsManifest["skills"][number] | undefined;
-  const nextSkills: SkillsManifest["skills"] = [];
-
-  if (looksLikePath(input)) {
-    const absolutePath = resolveFileUrlOrPath(commandCwd, input);
-    for (const skill of manifest.skills) {
-      const matches = skill.path && path.resolve(layout.rootDir, skill.path) === path.resolve(absolutePath);
-      if (matches && !removed) {
-        removed = skill;
-        continue;
-      }
-      nextSkills.push(skill);
-    }
-  } else {
-    const parsed = parseSkillSpecifier(input);
-    for (const skill of manifest.skills) {
-      if (skill.id === parsed.id && !removed) {
-        removed = skill;
-        continue;
-      }
-      nextSkills.push(skill);
-    }
+async function loadManifestOrDefault(rootDir: string): Promise<SkillsManifest> {
+  const manifestPath = path.join(rootDir, MANIFEST_FILE);
+  if (await exists(manifestPath)) {
+    return loadManifest(rootDir);
   }
-
-  if (!removed) {
-    throw new CliError(`Root skill not found: ${input}`, 1);
-  }
-
-  return {
-    nextManifest: {
-      ...manifest,
-      skills: nextSkills
-    },
-    removed
-  };
+  await ensureDir(rootDir);
+  const manifest = createDefaultManifest();
+  await saveManifest(rootDir, manifest);
+  return manifest;
 }
 
-function addTargetToManifest(
-  manifest: SkillsManifest,
-  nextTarget: ManifestTarget
-): { nextManifest: SkillsManifest; changed: boolean; updated: boolean } {
-  const targets = [...(manifest.targets ?? [])];
-  const existingIndex = targets.findIndex((target) => target.type === nextTarget.type);
-  if (existingIndex >= 0) {
-    const existing = targets[existingIndex];
-    const mergedPath = nextTarget.path ?? existing.path;
-    const mergedTarget: ManifestTarget = {
-      ...existing,
-      type: nextTarget.type,
-      ...(mergedPath ? { path: mergedPath } : {})
-    };
-    if (existing.path === mergedTarget.path) {
-      return { nextManifest: manifest, changed: false, updated: false };
-    }
-    targets[existingIndex] = mergedTarget;
-    return {
-      nextManifest: {
-        ...manifest,
-        targets
-      },
-      changed: true,
-      updated: true
-    };
+async function normalizePackOutputPath(commandCwd: string, output: string): Promise<string> {
+  const resolvedPath = resolveFileUrlOrPath(commandCwd, output);
+  if (await isDirectory(resolvedPath)) {
+    return path.join(resolvedPath, "skills.skillspm.tgz");
   }
-
-  targets.push({
-    type: nextTarget.type,
-    ...(nextTarget.path ? { path: nextTarget.path } : {})
-  });
-  return {
-    nextManifest: {
-      ...manifest,
-      targets
-    },
-    changed: true,
-    updated: false
-  };
+  if (!resolvedPath.endsWith(".skillspm.tgz")) {
+    return `${resolvedPath}.skillspm.tgz`;
+  }
+  return resolvedPath;
 }
 
-async function normalizeTargetPath(commandCwd: string, layout: ScopeLayout, input: string): Promise<string> {
-  const absolutePath = resolveFileUrlOrPath(commandCwd, input);
-  await assertConfiguredPathWithinRootReal(layout.rootDir, input, absolutePath, `target path ${input}`);
-  return normalizeRelativePath(layout.rootDir, absolutePath);
+async function toManifestPath(manifestRoot: string, absolutePath: string): Promise<string> {
+  if (await isPathWithinRootReal(manifestRoot, absolutePath)) {
+    return normalizeRelativePath(manifestRoot, absolutePath);
+  }
+  return absolutePath;
 }
 
-async function runInstallCommand(layout: ScopeLayout): Promise<void> {
-  const result = await installProject(layout);
-  if (result.manifest.settings?.auto_sync) {
-    await syncTargets(layout, result.manifest);
-  }
-}
-
-async function runUpdateCommand(
-  commandCwd: string,
-  layout: ScopeLayout,
-  input: string | undefined,
-  options: { to?: string }
-): Promise<void> {
-  const manifest = await loadManifest(layout.rootDir);
-  const existingLock = await loadLockfile(layout.rootDir);
-  const updatePlan = await prepareManifestForUpdate(commandCwd, layout, manifest, existingLock, input, options.to);
-
-  printInfo("Checking for updates...");
-  const result = await installProject(layout, { manifest: updatePlan.installManifest });
-  if (updatePlan.persistManifest) {
-    await saveManifest(layout.rootDir, updatePlan.persistManifest);
-  }
-  if (result.manifest.settings?.auto_sync) {
-    await syncTargets(layout, result.manifest);
-  }
-
-  if (updatePlan.pinnedVersion && updatePlan.selectedSkill) {
-    printSuccess(`Pinned ${updatePlan.selectedSkill.id} to ${updatePlan.pinnedVersion} in ${layout.scope} skills.yaml`);
-  }
-
-  const changes = diffLockfiles(existingLock, result.lockfile);
-  if (changes.length === 0) {
-    printInfo(
-      updatePlan.selectedSkill
-        ? `No updates for ${updatePlan.selectedSkill.id} under current manifest constraints`
-        : "No updates available under current manifest constraints"
-    );
-    return;
-  }
-
-  for (const change of changes) {
-    printSuccess(renderLockDiff(change));
-  }
-}
-
-async function prepareManifestForUpdate(
-  commandCwd: string,
-  layout: ScopeLayout,
-  manifest: SkillsManifest,
-  existingLock: SkillsLock | undefined,
-  input: string | undefined,
-  versionOverride?: string
-): Promise<{
-  installManifest: SkillsManifest;
-  persistManifest?: SkillsManifest;
-  selectedSkill?: SkillsManifest["skills"][number];
-  pinnedVersion?: string;
-}> {
-  if (!input) {
-    if (versionOverride) {
-      throw new CliError("--to requires a root skill id or local path.", 2);
-    }
-    return { installManifest: manifest };
-  }
-
-  const selectedIndex = await findManifestSkillIndex(commandCwd, layout, manifest, input);
-  if (selectedIndex < 0) {
-    throw new CliError(`Root skill not found: ${input}`, 1);
-  }
-
-  const selectedSkill = manifest.skills[selectedIndex];
-  if (!versionOverride) {
-    return {
-      installManifest: buildTargetedUpdateManifest(manifest, existingLock, selectedIndex),
-      selectedSkill
-    };
-  }
-
-  if (selectedSkill.path) {
-    throw new CliError("--to is only supported for index-backed root skills.", 2);
-  }
-  const selectedSource = resolveManifestSourceForPin(manifest, selectedSkill);
-  if (selectedSource?.type !== "index") {
-    throw new CliError("--to is only supported for index-backed root skills.", 2);
-  }
-  if (semver.valid(versionOverride) !== versionOverride) {
-    throw new CliError(`--to requires an exact semver version. Received: ${versionOverride}`, 2);
-  }
-
-  const nextSkills = [...manifest.skills];
-  nextSkills[selectedIndex] = {
-    ...selectedSkill,
-    version: versionOverride
-  };
-  const persistManifest: SkillsManifest = {
-    ...manifest,
-    skills: nextSkills
-  };
-  const installManifest = buildTargetedUpdateManifest(persistManifest, existingLock, selectedIndex);
-
-  return {
-    installManifest,
-    persistManifest,
-    selectedSkill: nextSkills[selectedIndex],
-    pinnedVersion: versionOverride
-  };
-}
-
-function buildTargetedUpdateManifest(
-  manifest: SkillsManifest,
-  existingLock: SkillsLock | undefined,
-  selectedIndex: number
-): SkillsManifest {
-  const nextSkills = manifest.skills.map((skill, index) => {
-    if (index === selectedIndex || skill.path) {
-      return skill;
-    }
-
-    const lockedVersion = existingLock?.resolved[skill.id]?.version;
-    if (!canPreserveLockedRootVersion(skill.version, lockedVersion)) {
-      return skill;
-    }
-
-    return {
-      ...skill,
-      version: lockedVersion
-    };
-  });
-
-  const changed = nextSkills.some((skill, index) => skill !== manifest.skills[index]);
-  if (!changed) {
-    return manifest;
-  }
-
-  return {
-    ...manifest,
-    skills: nextSkills
-  };
-}
-
-function canPreserveLockedRootVersion(requestedRange: string | undefined, lockedVersion: string | undefined): lockedVersion is string {
-  if (!lockedVersion || semver.valid(lockedVersion) !== lockedVersion) {
-    return false;
-  }
-  if (!requestedRange) {
-    return true;
-  }
-  return semver.satisfies(lockedVersion, requestedRange);
-}
-
-function resolveManifestSourceForPin(manifest: SkillsManifest, skill: SkillsManifest["skills"][number]): ManifestSource | undefined {
-  if (skill.path) {
-    return undefined;
-  }
-  if (skill.source) {
-    return manifest.sources?.find((source) => source.name === skill.source);
-  }
-  const indexSources = (manifest.sources ?? []).filter((source) => source.type === "index");
-  return indexSources.length === 1 ? indexSources[0] : undefined;
-}
-
-function buildTargetedInstallManifest(
-  manifest: SkillsManifest,
-  existingLock: SkillsLock | undefined,
-  selectedIndex: number
-): SkillsManifest {
-  if (!existingLock) {
-    return manifest;
-  }
-
-  let changed = false;
-  const nextSkills = manifest.skills.map((skill, index) => {
-    if (index === selectedIndex || skill.path) {
-      return skill;
-    }
-
-    const lockedVersion = existingLock.resolved[skill.id]?.version;
-    if (!lockedVersion || lockedVersion === "unversioned") {
-      return skill;
-    }
-    if (skill.version && semver.satisfies(lockedVersion, skill.version) === false) {
-      return skill;
-    }
-    if (skill.version === lockedVersion) {
-      return skill;
-    }
-
-    changed = true;
-    return {
-      ...skill,
-      version: lockedVersion
-    };
-  });
-
-  return changed ? { ...manifest, skills: nextSkills } : manifest;
-}
-
-
-async function findManifestSkillIndex(
-  commandCwd: string,
-  layout: ScopeLayout,
-  manifest: SkillsManifest,
-  input: string
-): Promise<number> {
-  if (looksLikePath(input)) {
-    const absolutePath = resolveFileUrlOrPath(commandCwd, input);
-    return manifest.skills.findIndex((skill) => skill.path && path.resolve(layout.rootDir, skill.path) === path.resolve(absolutePath));
-  }
-
-  const parsed = parseSkillSpecifier(input);
-  return manifest.skills.findIndex((skill) => skill.id === parsed.id);
-}
-
-interface LockDiffRecord {
-  id: string;
-  before: string | null;
-  after: string | null;
-}
-
-function diffLockfiles(before: Awaited<ReturnType<typeof loadLockfile>>, after: Awaited<ReturnType<typeof loadLockfile>>): LockDiffRecord[] {
-  const previousResolved = before?.resolved ?? {};
-  const nextResolved = after?.resolved ?? {};
-  const ids = new Set([...Object.keys(previousResolved), ...Object.keys(nextResolved)]);
-  return [...ids]
-    .sort((left, right) => left.localeCompare(right))
-    .flatMap((id) => {
-      const previousVersion = previousResolved[id]?.version ?? null;
-      const nextVersion = nextResolved[id]?.version ?? null;
-      if (previousVersion === nextVersion) {
-        return [];
-      }
-      return [{ id, before: previousVersion, after: nextVersion }];
-    });
-}
-
-function renderLockDiff(change: LockDiffRecord): string {
-  if (change.before === null) {
-    return `Added ${change.id}@${change.after}`;
-  }
-  if (change.after === null) {
-    return `Removed ${change.id}@${change.before}`;
-  }
-  return `Updated ${change.id} ${change.before} -> ${change.after}`;
-}
-
-async function inspectSkill(commandCwd: string, input: string, options: { write?: boolean; setVersion?: string; json?: boolean }): Promise<void> {
-  const skillRoot = resolveFileUrlOrPath(commandCwd, input);
-  if (!(await exists(skillRoot))) {
-    throw new CliError(`Skill path does not exist: ${input}`, 2);
-  }
-  if (!(await isDirectory(skillRoot))) {
-    throw new CliError(`Skill path is not a directory: ${input}`, 2);
-  }
-
-  const normalizedSkillPath = normalizeRelativePath(commandCwd, skillRoot);
-  const skillMarkdownPath = path.join(skillRoot, "SKILL.md");
-  if (!(await exists(skillMarkdownPath))) {
-    throw new CliError(`SKILL.md is required for ${normalizedSkillPath}. Add it before running inspect.`, 2);
-  }
-
-  const metadataPath = path.join(skillRoot, "skill.yaml");
-  const existingMetadata = await loadSkillMetadata(skillRoot);
-  const nextMetadata = buildInspectableMetadata(skillRoot, existingMetadata, options.setVersion);
-  if (options.write) {
-    await writeYamlDocument(metadataPath, nextMetadata);
-  }
-
-  const report = buildInspectReport(normalizedSkillPath, existingMetadata, nextMetadata, {
-    written: options.write,
-    versionOverridden: Boolean(options.setVersion)
-  });
-  report.metadata_path = normalizeRelativePath(commandCwd, metadataPath);
-  report.skill_md.path = normalizeRelativePath(commandCwd, skillMarkdownPath);
-  report.skill_yaml.path = report.metadata_path;
-
-  if (options.json) {
-    emitJson(report);
-    return;
-  }
-
-  printInfo(renderInspectText(report));
-  process.stdout.write(`${renderSkillMetadata(nextMetadata)}\n`);
-  if (!options.write) {
-    printInfo("");
-    printInfo(`Run \`skillspm inspect ${input} --write\` to write skill.yaml.`);
-  }
-}
-
-function buildInspectableMetadata(skillRoot: string, existingMetadata: SkillMetadata | undefined, setVersion?: string): SkillMetadata {
-  const folderName = path.basename(skillRoot);
-  return validateSkillMetadata(
-    {
-      ...existingMetadata,
-      schema: "skill/v1",
-      id: existingMetadata?.id ?? folderName,
-      name: existingMetadata?.name ?? folderName,
-      version: setVersion ?? existingMetadata?.version ?? "0.1.0",
-      package: {
-        type: existingMetadata?.package?.type ?? "dir",
-        entry: existingMetadata?.package?.entry ?? "./"
-      },
-      dependencies: existingMetadata?.dependencies ?? []
-    },
-    `generated metadata for ${skillRoot}`
-  );
-}
-
-function renderSkillMetadata(metadata: SkillMetadata): string {
-  return stringifyYaml(metadata, {
-    indent: 2,
-    lineWidth: 0,
-    minContentWidth: 0
-  }).trimEnd();
-}
-
-function emitJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
-
-function renderListSkillText(skill: {
-  id: string;
-  version: string | null;
-  version_range: string | null;
-  source: string | null;
-  path: string | null;
-}): string {
-  const versionLabel = skill.version ?? skill.version_range ?? "*";
-  const details = [];
-  if (skill.path) {
-    details.push(skill.path);
-  }
-  if (skill.source && skill.source !== "path") {
-    details.push(`source=${skill.source}`);
-  }
-  return `${skill.id} ${versionLabel}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
-}
-
-function renderHelp(commandName?: string): string {
-  if (commandName === "init") {
-    return [
-      "Usage: skillspm init [options]",
-      "",
-      "Create a starter skills.yaml for the selected scope",
-      "",
-      "Options:",
-      "  --force           Overwrite existing skills.yaml",
-      "  -g, --global      Use ~/.skills instead of the current project"
-    ].join("\n");
-  }
+function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
   if (commandName === "add") {
     return [
       "Usage: skillspm add <skill> [options]",
@@ -815,191 +315,120 @@ function renderHelp(commandName?: string): string {
       "Add a root skill to skills.yaml",
       "",
       "Options:",
-      "  --source <name>   Source name for index-backed skills",
       "  --install         Run install after writing skills.yaml",
-      "  -g, --global      Use ~/.skills instead of the current project"
-    ].join("\n");
-  }
-  if (commandName === "remove") {
-    return [
-      "Usage: skillspm remove <skill> [options]",
-      "",
-      "Remove a root skill from skills.yaml",
-      "",
-      "Options:",
-      "  -g, --global      Use ~/.skills instead of the current project"
+      "  -g, --global      Use ~/.skillspm/global instead of the current project"
     ].join("\n");
   }
   if (commandName === "install") {
     return [
-      "Usage: skillspm install [options]",
+      "Usage: skillspm install [input] [options]",
       "",
-      "Resolve and install skills into the selected scope",
+      "Resolve a skills environment and cache exact skills locally",
+      "",
+      "Install input precedence:",
+      "  1. explicit path to skills.yaml or *.skillspm.tgz",
+      "  2. current scope skills.yaml",
+      "  3. exactly one current-directory *.skillspm.tgz",
       "",
       "Options:",
-      "  -g, --global      Use ~/.skills instead of the current project"
+      "  -g, --global      Use ~/.skillspm/global instead of the current project"
     ].join("\n");
   }
-  if (commandName === "update") {
+  if (commandName === "pack") {
     return [
-      "Usage: skillspm update [skill] [options]",
+      "Usage: skillspm pack [out] [options]",
       "",
-      "Refresh installed skills from the current manifest",
+      "Bundle the current locked environment into a portable pack",
       "",
       "Options:",
-      "  --to <version>    Pin the selected index-backed root skill to an exact version",
-      "  -g, --global      Use ~/.skills instead of the current project"
-    ].join("\n");
-  }
-  if (commandName === "bootstrap") {
-    return [
-      "Usage: skillspm bootstrap [options]",
-      "",
-      "Install, optionally auto-sync, then run doctor",
-      "",
-      "Options:",
-      "  -g, --global      Use ~/.skills instead of the current project"
+      "  -g, --global      Use ~/.skillspm/global instead of the current project"
     ].join("\n");
   }
   if (commandName === "freeze") {
     return [
       "Usage: skillspm freeze [options]",
       "",
-      "Rewrite skills.lock from the currently installed state",
+      "Rewrite skills.lock with exact resolved versions",
       "",
       "Options:",
-      "  -g, --global      Use ~/.skills instead of the current project"
+      "  -g, --global      Use ~/.skillspm/global instead of the current project"
     ].join("\n");
   }
-  if (commandName === "import") {
+  if (commandName === "adopt") {
     return [
-      "Usage: skillspm import [options]",
+      "Usage: skillspm adopt [options]",
       "",
       "Discover existing skills and merge them into skills.yaml",
       "",
       "Options:",
       "  --from <source>   Scan openclaw, codex, claude_code, or a local path",
-      "  -g, --global      Use ~/.skills instead of the current project"
-    ].join("\n");
-  }
-  if (commandName === "doctor") {
-    return [
-      "Usage: skillspm doctor [options]",
-      "",
-      "Check skills health",
-      "",
-      "Options:",
-      "  --json            Emit a machine-readable report",
-      "  -g, --global      Use ~/.skills instead of the current project"
-    ].join("\n");
-  }
-  if (commandName === "list") {
-    return [
-      "Usage: skillspm list [options]",
-      "",
-      "List root or resolved skills",
-      "",
-      "Options:",
-      "  --resolved        Show the full resolved set",
-      "  --json            Emit a machine-readable report",
-      "  -g, --global      Use ~/.skills instead of the current project"
-    ].join("\n");
-  }
-  if (commandName === "snapshot") {
-    return [
-      "Usage: skillspm snapshot [options]",
-      "",
-      "Summarize the selected skills environment",
-      "",
-      "Options:",
-      "  --resolved        Resolve dependencies live instead of preferring skills.lock",
-      "  --json            Emit a machine-readable snapshot",
-      "  -g, --global      Use ~/.skills instead of the current project"
-    ].join("\n");
-  }
-  if (commandName === "why") {
-    return [
-      "Usage: skillspm why <skill> [options]",
-      "",
-      "Explain why a skill is installed",
-      "",
-      "Options:",
-      "  -g, --global      Use ~/.skills instead of the current project"
+      "  -g, --global      Use ~/.skillspm/global instead of the current project"
     ].join("\n");
   }
   if (commandName === "sync") {
     return [
       "Usage: skillspm sync [target] [options]",
       "",
-      "Sync installed skills to target directories",
+      "Sync locked skills from the local library cache to targets",
       "",
       "Options:",
       "  --mode <mode>     Sync mode: copy or symlink",
-      "  -g, --global      Use ~/.skills instead of the current project"
+      "                    Default sync is non-destructive and leaves unmanaged target entries untouched",
+      "  -g, --global      Use ~/.skillspm/global instead of the current project"
     ].join("\n");
   }
-  if (commandName === "target") {
+  if (commandName === "doctor") {
     return [
-      "Usage: skillspm target add <target> [options]",
+      "Usage: skillspm doctor [options]",
       "",
-      "Manage sync targets",
-      "",
-      "Commands:",
-      "  add <target>      Add openclaw, codex, claude_code, or generic to skills.yaml",
+      "Check manifest, lockfile, cache, and targets",
       "",
       "Options:",
-      "  --path <path>     Set an explicit target path (required for generic)",
-      "  -g, --global      Use ~/.skills instead of the current project"
+      "  --json            Emit a machine-readable report",
+      "  -g, --global      Use ~/.skillspm/global instead of the current project"
     ].join("\n");
   }
-  if (commandName === "inspect") {
+  if (commandName === "help") {
     return [
-      "Usage: skillspm inspect <path> [options]",
+      "Usage: skillspm help [command]",
       "",
-      "Inspect a local skill directory and generate minimal metadata",
-      "",
-      "Options:",
-      "  --write           Write or update skill.yaml in the target directory",
-      "  --set-version <version>",
-      "                    Override the generated version",
-      "  --json            Emit a machine-readable report"
+      "Show top-level or command-specific help"
     ].join("\n");
   }
-
   return [
     "Usage: skillspm <command> [options]",
     "",
     "Manage declarative, reproducible Skills environments",
-    "Default scope: project (use -g/--global for ~/.skills)",
+    "Default scope: project",
     "",
-    "Core workflow:",
-    "  install           Resolve and install skills into the selected scope",
-    "  freeze            Rewrite skills.lock from the installed state",
-    "  sync              Sync installed skills to target directories",
-    "  import            Discover existing skills and merge them into skills.yaml",
-    "  inspect           Inspect a local skill directory and generate minimal metadata",
-    "",
-    "Inspection and diagnostics:",
-    "  doctor            Check skills health",
-    "  list              List root or resolved skills",
-    "  snapshot          Summarize the selected skills environment",
-    "  why               Explain why a skill is installed",
-    "",
-    "Manifest helpers:",
-    "  init              Create a starter skills.yaml for the selected scope",
+    "Public commands:",
     "  add               Add a root skill to skills.yaml",
-    "  remove            Remove a root skill from skills.yaml",
-    "  target            Manage sync targets",
+    "  install           Resolve a skills environment and cache exact skills locally",
+    "  pack              Bundle the current locked environment into a portable pack",
+    "  freeze            Rewrite skills.lock with exact resolved versions",
+    "  adopt             Discover existing skills and merge them into skills.yaml",
+    "  sync              Sync locked skills from the local library cache to targets",
+    "  doctor            Check manifest, lockfile, cache, and targets",
+    "  help              Show top-level or command-specific help",
     "",
-    "Other commands:",
-    "  update            Refresh installed skills from the current manifest",
-    "  bootstrap         Install, optionally auto-sync, then run doctor",
-    "",
-    "Run `skillspm <command> --help` for command-specific usage."
+    "Run `skillspm help <command>` for command-specific usage."
   ].join("\n");
 }
 
-function describeManifestSkill(skill: SkillsManifest["skills"][number]): string {
+function resolvePublicCommand(commandName: string | undefined): (typeof PUBLIC_COMMANDS)[number] | undefined {
+  if (!commandName) {
+    return undefined;
+  }
+  if (REMOVED_PUBLIC_COMMANDS.has(commandName)) {
+    throw new CliError(`Unknown command ${commandName}. Run \`skillspm help\` for public commands.`, 2);
+  }
+  if ((PUBLIC_COMMANDS as readonly string[]).includes(commandName)) {
+    return commandName as (typeof PUBLIC_COMMANDS)[number];
+  }
+  throw new CliError(`Unknown command ${commandName}. Run \`skillspm help\` for public commands.`, 2);
+}
+
+function describeManifestSkill(skill: ManifestSkill): string {
   if (skill.path) {
     return `${skill.id} (${skill.path})`;
   }
@@ -1017,60 +446,8 @@ function parseSkillSpecifier(input: string): { id: string; version?: string } {
   return { id: input };
 }
 
-function parseTargetType(value: string): TargetType {
-  if (value === "openclaw" || value === "codex" || value === "claude_code" || value === "generic") {
-    return value;
-  }
-  throw new CliError(`Unknown target ${value}. Use openclaw, codex, claude_code, or generic.`, 2);
-}
-
 function looksLikePath(value: string): boolean {
   return value.startsWith("file://") || value.startsWith("./") || value.startsWith("../") || value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
-}
-
-function findWhyChain(
-  manifest: SkillsManifest,
-  rootIds: string[],
-  nodes: Map<string, { dependencies: { id: string }[] }>,
-  targetId: string
-): string[] {
-  const queue: string[][] = rootIds
-    .filter((rootId) => manifest.skills.some((skill) => skill.id === rootId))
-    .map((rootId) => [rootId]);
-  const visited = new Set<string>();
-
-  while (queue.length > 0) {
-    const chain = queue.shift()!;
-    const current = chain[chain.length - 1];
-    if (current === targetId) {
-      return chain;
-    }
-    if (visited.has(current)) {
-      continue;
-    }
-    visited.add(current);
-    const node = nodes.get(current);
-    for (const dependency of node?.dependencies ?? []) {
-      queue.push([...chain, dependency.id]);
-    }
-  }
-
-  return [];
-}
-
-async function ensureGitignoreContains(cwd: string, line: string): Promise<void> {
-  const gitignorePath = path.join(cwd, ".gitignore");
-  if (!(await exists(gitignorePath))) {
-    await writeFile(gitignorePath, `${line}\n`, "utf8");
-    return;
-  }
-
-  const current = await readFile(gitignorePath, "utf8");
-  const lines = new Set(current.split(/\r?\n/).filter(Boolean));
-  if (!lines.has(line)) {
-    const suffix = current.endsWith("\n") || current.length === 0 ? "" : "\n";
-    await writeFile(gitignorePath, `${current}${suffix}${line}\n`, "utf8");
-  }
 }
 
 const executedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
