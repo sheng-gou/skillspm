@@ -169,6 +169,70 @@ skillspm sync claude_code
 skillspm freeze
 ```
 
+## Higher-level add UX
+
+In Phase 1, the primary higher-level add flows are:
+
+* one local skill directory via `add --from <dir>`
+* one explicit canonical skills.sh / ClawHub ref via `add <provider-ref>`
+* one skill id from a public anonymous HTTPS repo via `add <id@range> --from <repo-url>`
+
+Explicit local index/catalog sources remain supported for advanced internal compatibility, but they are not the primary UX.
+
+### Add one local skill directory
+
+```bash
+skillspm add --from ./local-skills/code-review
+```
+
+This compiles to a normal root path entry in `skills.yaml`.
+
+### Add from an explicit skills.sh / ClawHub provider ref
+
+```bash
+skillspm add skills.sh:owner/repo/code-review
+skillspm add clawhub:owner/repo/code-review
+skillspm add https://skills.sh/owner/repo/code-review
+```
+
+This resolves the canonical provider ref to:
+
+* a persisted `sources[]` entry with `type: git`
+* a persisted `sources[].provider.kind` of `skills.sh` or `clawhub`
+* a normalized GitHub clone URL such as `https://github.com/owner/repo.git`
+* a normal root skill id inferred from the matched skill metadata
+* a persisted canonical `skills[].provider_ref`
+
+This slice is intentionally conservative in 0.3.0: only explicit canonical refs are supported, only public GitHub-backed entries are in scope, and there is no provider search / private / auth flow.
+
+### Add from a public anonymous HTTPS repo
+
+```bash
+skillspm add acme/code-review@^1.2.0 --from https://github.com/example/public-skills.git
+```
+
+This compiles to:
+
+* a persisted `sources[]` entry with `type: git`
+* a normal root skill with `id + version + source`
+
+`--source <name>` is optional when you want to control the persisted source name. Private or authenticated repos are still out of scope.
+
+### Advanced compatibility: add from a local index or catalog
+
+```bash
+skillspm add acme/code-review@^1.2.0 --from ./catalog
+```
+
+You can also point directly at an index file such as `./skills-index.yaml`.
+
+This compiles to:
+
+* a persisted `sources[]` entry with `type: index`
+* a normal root skill with `id + version + source`
+
+If a directory looks like both a local skill root and an index/catalog container, `skillspm add --from <dir>` now fails as ambiguous. Point `--from` at the exact skill directory you want, or pass the explicit index file path.
+
 ## `skills.yaml`
 
 `skills.yaml` is the source of truth for a skills environment.
@@ -191,8 +255,8 @@ After that:
 
 The repo includes runnable, in-repo examples:
 
-* [`examples/source-aware-live`](examples/source-aware-live/README.md): one source-backed skill plus one local path skill in the same workspace
-* [`examples/pack-transfer`](examples/pack-transfer/README.md): install from a declared source, write a directory pack, then restore from top-level `packs[]`
+* [`examples/source-aware-live`](examples/source-aware-live/README.md): advanced local-index compatibility plus one local path skill in the same workspace
+* [`examples/pack-transfer`](examples/pack-transfer/README.md): pack restore using an explicit local index fixture for reproducible in-repo testing
 
 ### Minimal example
 
@@ -217,13 +281,23 @@ schema: skills/v1
 
 sources:
   - name: community
-    type: index
-    url: ./skills-index.yaml
+    type: git
+    url: https://github.com/example/public-skills.git
+
+  - name: frontend-catalog
+    type: git
+    url: https://github.com/acme/provider-skills.git
+    provider:
+      kind: skills.sh
 
 skills:
   - id: openai/code-review
     version: ^1.2.0
     source: community
+
+  - id: acme/frontend-design
+    source: frontend-catalog
+    provider_ref: skills.sh:acme/provider-skills/frontend-design
 
   - id: local/release-check
     path: ./local-skills/release-check
@@ -242,27 +316,38 @@ settings:
 
 `skillspm install` only installs skills from what is declared in `skills.yaml`.
 
+Primary Phase 1 flows are:
+
+* local path skills
+* declared anonymous public HTTPS git sources
+* provider-backed git sources persisted as `type: git` plus `sources[].provider.kind`
+
+Explicit local index/catalog sources are still supported as an advanced compatibility path for internal workflows and fixtures.
+
 In the current implementation:
 
 * local path skills declared with `path`
 * source-backed skills resolved from declared `sources[]`
+* provider-added roots persist `skills[].provider_ref` on top of the same git source boundary
 * exact-version restores from configured top-level `packs[]`, including pack-only restore for an exact root with no declared source
 
 In the current release, a source means an entry in `sources[]`. Supported source types today are:
 
-* `index`
 * anonymous public HTTPS `git` with a plain repo URL only
+* `index` for explicit local compatibility manifests
 
 A pack is a directory written by `skillspm pack --out <dir>`. It does not replace the logical source, and it is not a source type.
 If a manifest declares an exact version and a matching node exists in a configured pack, install can materialize that node from the pack instead of fetching live content from a declared source. That also enables pack-only restore for an exact root when no source is declared.
 
 This keeps installs explicit and reproducible.
 
+For the formal persisted boundary drafted for 0.3.0, see [`docs/skills-yaml-schema-v0.3.0.md`](docs/skills-yaml-schema-v0.3.0.md).
+
 ### Key fields
 
 * `schema`: manifest version
 * `project`: optional project-level metadata such as an optional `project.name`
-* `sources`: optional declared live sources (`index` or restricted public HTTPS `git`)
+* `sources`: optional declared live sources (`index` or restricted public HTTPS `git`, with optional `provider.kind` on git)
 * `packs`: optional declared directory packs for exact-version restore
 * `skills`: the root skills in this environment
 * `targets`: where installed skills should be synced
@@ -287,15 +372,26 @@ A skill can be declared in two common ways:
   source: community
 ```
 
+#### Provider-backed source skill
+
+```yaml
+- id: acme/frontend-design
+  source: frontend-catalog
+  provider_ref: skills.sh:acme/provider-skills/frontend-design
+```
+
 In short:
 
 * use `path` for local skills
-* use `id + version + source` for skills resolved from a declared source
+* use `id + version + source` for ordinary source-backed skills
+* add `provider_ref` when the root was added from a provider-backed git source
 * use top-level `packs[]` when you want install-time exact-version restore from a portable directory pack, including pack-only restore for exact roots
+
+For interactive authoring, `skillspm add ...` writes these same manifest forms for local skill directories, explicit canonical skills.sh / ClawHub refs, public anonymous HTTPS git repos, and explicit local index/catalog compatibility sources.
 
 ### Public git repo layout
 
-Phase 1 only supports public anonymous `https://` git sources, and those sources support one fixed layout only. Only plain repo URLs are accepted: `file://`, `ssh://`, `git@host:repo`, URLs with embedded credentials, non-empty query strings, and non-empty `#` fragments are rejected. During install, `skillspm` isolates git config, disables credential prompts/helpers, and blocks `file://` transport so ambient rewrite rules such as `url.*.insteadOf` cannot bypass that policy.
+Phase 1 only supports public anonymous `https://` git sources, and those sources default to one fixed layout only. Only plain repo URLs are accepted: `file://`, `ssh://`, `git@host:repo`, URLs with embedded credentials, non-empty query strings, and non-empty `#` fragments are rejected. During install, `skillspm` isolates git config, disables credential prompts/helpers, and blocks `file://` transport so ambient rewrite rules such as `url.*.insteadOf` cannot bypass that policy.
 
 ```text
 skills/
@@ -312,6 +408,13 @@ skills/acme/code-review/1.2.0/
 ```
 
 `skill.yaml.version` must match the directory version.
+
+Explicit canonical `skills.sh:` / `clawhub:` refs are adapted onto this same git foundation, but their persisted boundary stays distinct. `skillspm add <provider-ref>` writes a normal `type: git` source plus `sources[].provider.kind`, and the root keeps `skills[].provider_ref` for provenance. Resolver behavior is split on purpose:
+
+* plain `type: git` sources stay strict and only use `skills/<skill-id path>/<version>`
+* only `type: git` sources with persisted `provider.kind` may use the conservative provider-backed fallback locator
+
+That provider-backed fallback scans the cloned repo for a unique skill directory that contains `SKILL.md` or `skill.yaml` and matches the requested skill metadata id or basename (with `provider_ref` retained for root provenance). Ambiguous, malformed, non-GitHub, search-based, private, and authenticated flows are rejected.
 
 ### Manifest example with public HTTPS git + pack restore
 
@@ -478,7 +581,7 @@ Recommended usage:
 | `skillspm snapshot [--json] [-g]`          | Export the current skills environment                        |
 | `skillspm doctor [--json] [-g]`            | Validate manifest, lockfile, installed skills, and targets   |
 | `skillspm init [-g]`                       | Create a starter `skills.yaml` for a project or global scope |
-| `skillspm add <skill> [-g]`                | Add a root skill entry to `skills.yaml`                      |
+| `skillspm add [skill] [--from <source>] [-g]` | Add a local or source-backed root skill entry to `skills.yaml` |
 | `skillspm remove <skill> [-g]`             | Remove a root skill entry from `skills.yaml`                 |
 | `skillspm list [--resolved] [--json] [-g]` | Show skills in the current scope                             |
 | `skillspm why <skill> [-g]`                | Explain why a skill is installed                             |
@@ -519,8 +622,9 @@ What works today:
 * project scope and global scope
 * manifest + lockfile workflow
 * local path skills
-* index source install
 * restricted public HTTPS git source install
+* explicit canonical skills.sh / ClawHub refs that normalize onto public GitHub git sources
+* explicit local index source install for compatibility workflows
 * directory pack export and exact-version restore via top-level `packs[]`
 * import from OpenClaw / Codex / Claude Code / local path
 * sync to OpenClaw / Codex / Claude Code / generic target
@@ -534,6 +638,7 @@ Not implemented yet or still limited:
 
 * private/authenticated git or other non-plain-HTTPS git source flows
 * remote registry / auth / download flows beyond declared local index paths and restricted public HTTPS git
+* hosted catalog features beyond the explicit canonical GitHub-backed skills.sh / ClawHub adapter (for example search, naked short refs, or private entries)
 * automatic dependency inference for new skills
 * deeper host compatibility rules
 

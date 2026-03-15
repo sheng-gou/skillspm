@@ -80,6 +80,16 @@ function validateLockfile(lockfile: unknown): SkillsLock {
       if (entry.source.revision !== undefined && typeof entry.source.revision !== "string") {
         errors.push(`resolved.${skillId}.source.revision must be a string`);
       }
+      if (entry.source.provider !== undefined && (typeof entry.source.provider !== "object" || entry.source.provider === null || Array.isArray(entry.source.provider))) {
+        errors.push(`resolved.${skillId}.source.provider must be an object`);
+      } else if (entry.source.provider) {
+        if (entry.source.type !== "git") {
+          errors.push(`resolved.${skillId}.source.provider is only supported for git sources`);
+        }
+        if (entry.source.provider.kind !== "skills.sh" && entry.source.provider.kind !== "clawhub") {
+          errors.push(`resolved.${skillId}.source.provider.kind must be skills.sh or clawhub`);
+        }
+      }
     }
     if (entry.artifact !== undefined && (typeof entry.artifact !== "object" || entry.artifact === null || Array.isArray(entry.artifact))) {
       errors.push(`resolved.${skillId}.artifact must be an object`);

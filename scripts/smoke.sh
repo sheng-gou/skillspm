@@ -13,6 +13,17 @@ EXAMPLE_PACK_RESTORE_DIR="${ROOT_DIR}/examples/pack-transfer/restore-workspace"
 export HOME="${HOME_DIR}"
 
 cleanup_examples() {
+  if [[ -n "${PROVIDER_GITHUB_SERVER_PID:-}" ]]; then
+    kill "${PROVIDER_GITHUB_SERVER_PID}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${PROVIDER_GITHUB_HOSTS_BACKUP:-}" && -f "${PROVIDER_GITHUB_HOSTS_BACKUP}" ]]; then
+    cp "${PROVIDER_GITHUB_HOSTS_BACKUP}" /etc/hosts
+  fi
+  if [[ -n "${PROVIDER_GITHUB_CA_ANCHOR:-}" && -f "${PROVIDER_GITHUB_CA_ANCHOR}" ]]; then
+    rm -f "${PROVIDER_GITHUB_CA_ANCHOR}"
+    update-ca-trust extract >/tmp/provider-github-ca-cleanup.log 2>&1 || true
+  fi
+
   rm -rf \
     "${EXAMPLE_SOURCE_AWARE_DIR}/.skills" \
     "${EXAMPLE_SOURCE_AWARE_DIR}/skills.lock" \
@@ -50,10 +61,461 @@ grep -q "Validate manifest, lockfile, installed skills, and targets" /tmp/skills
 ${CLI} bootstrap --help >/tmp/skills-help-bootstrap.log
 grep -q "Run install, auto-sync when enabled, then doctor" /tmp/skills-help-bootstrap.log
 
+${CLI} add --help >/tmp/skills-help-add.log
+grep -q "Usage: skillspm add \\[skill\\] \\[options\\]" /tmp/skills-help-add.log
+grep -q "Add a local, provider-backed, or source-backed root skill to skills.yaml" /tmp/skills-help-add.log
+grep -q "skillspm add skills.sh:owner/repo/skill" /tmp/skills-help-add.log
+grep -q -- "--from <source>" /tmp/skills-help-add.log
+
+start_provider_github_server() {
+  local docroot="$1"
+  local cert_path="$2"
+  local key_path="$3"
+  local server_script="${TMP_DIR}/provider-github-static-server.mjs"
+
+  cat > "${server_script}" <<'EOF'
+import https from "node:https";
+import path from "node:path";
+import { createReadStream } from "node:fs";
+import { access, readFile, stat } from "node:fs/promises";
+
+const [root, certPath, keyPath] = process.argv.slice(2);
+const resolvedRoot = path.resolve(root);
+const cert = await readFile(certPath);
+const key = await readFile(keyPath);
+
+const server = https.createServer({ cert, key }, async (req, res) => {
+  try {
+    const requestUrl = new URL(req.url ?? "/", "https://github.com");
+    const relativePath = requestUrl.pathname.replace(/^\/+/, "");
+    const candidatePath = path.resolve(resolvedRoot, relativePath);
+    if (!candidatePath.startsWith(`${resolvedRoot}${path.sep}`) && candidatePath !== resolvedRoot) {
+      res.statusCode = 403;
+      res.end("forbidden");
+      return;
+    }
+
+    const fileStat = await stat(candidatePath);
+    if (!fileStat.isFile()) {
+      res.statusCode = 404;
+      res.end("not found");
+      return;
+    }
+
+    await access(candidatePath);
+    createReadStream(candidatePath).pipe(res);
+  } catch {
+    res.statusCode = 404;
+    res.end("not found");
+  }
+});
+
+server.listen(443, "127.0.0.1");
+EOF
+
+  node "${server_script}" "${docroot}" "${cert_path}" "${key_path}" >/tmp/provider-github-server.log 2>&1 &
+  PROVIDER_GITHUB_SERVER_PID=$!
+  sleep 1
+}
+
 ${CLI} add acme/plain >/tmp/skills-add-null.log
 grep -q "acme/plain" skills.yaml
 ! grep -q "version: null" skills.yaml
 ! grep -q "source: null" skills.yaml
+
+ADD_FROM_LOCAL_DIR="${TMP_DIR}/add-from-local-workspace"
+mkdir -p "${ADD_FROM_LOCAL_DIR}/local-skills/from-dir"
+cd "${ADD_FROM_LOCAL_DIR}"
+
+${CLI} init >/tmp/skills-add-from-local-init.log
+
+cat > local-skills/from-dir/SKILL.md <<'EOF'
+# add from local
+EOF
+
+cat > local-skills/from-dir/skill.yaml <<'EOF'
+schema: skill/v1
+id: local/from-dir
+name: Add From Local
+version: 0.33.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+${CLI} add --from ./local-skills/from-dir >/tmp/skills-add-from-local.log
+grep -q "id: local/from-dir" skills.yaml
+grep -q "path: ./local-skills/from-dir" skills.yaml
+${CLI} install >/tmp/skills-add-from-local-install.log
+test -d .skills/installed/local__from-dir@0.33.0
+
+ADD_FROM_AMBIGUOUS_DIR="${TMP_DIR}/add-from-ambiguous-workspace"
+mkdir -p "${ADD_FROM_AMBIGUOUS_DIR}/catalog/registry/index-app"
+cd "${ADD_FROM_AMBIGUOUS_DIR}"
+
+${CLI} init >/tmp/skills-add-from-ambiguous-init.log
+
+cat > catalog/SKILL.md <<'EOF'
+# ambiguous catalog root
+EOF
+
+cat > catalog/skill.yaml <<'EOF'
+schema: skill/v1
+id: local/ambiguous-catalog
+name: Ambiguous Catalog
+version: 0.4.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > catalog/registry/index-app/SKILL.md <<'EOF'
+# ambiguous index app
+EOF
+
+cat > catalog/registry/index-app/skill.yaml <<'EOF'
+schema: skill/v1
+id: acme/ambiguous-index-app
+name: Ambiguous Index App
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > catalog/skills-index.yaml <<'EOF'
+schema: skills-index/v1
+skills:
+  - id: acme/ambiguous-index-app
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/index-app
+EOF
+
+cp skills.yaml skills.before.add-from-ambiguous.yaml
+set +e
+${CLI} add --from ./catalog >/tmp/skills-add-from-ambiguous.log 2>&1
+ADD_FROM_AMBIGUOUS_EXIT=$?
+set -e
+test "${ADD_FROM_AMBIGUOUS_EXIT}" -eq 2
+grep -q "Source path ./catalog is ambiguous" /tmp/skills-add-from-ambiguous.log
+grep -q "pass --from ./catalog/skills-index.yaml" /tmp/skills-add-from-ambiguous.log
+cmp -s skills.before.add-from-ambiguous.yaml skills.yaml
+
+${CLI} add acme/ambiguous-index-app@^1.0.0 --from ./catalog/skills-index.yaml >/tmp/skills-add-from-ambiguous-explicit-index.log
+grep -q "name: index-catalog" skills.yaml
+grep -q "url: ./catalog/skills-index.yaml" skills.yaml
+grep -q "id: acme/ambiguous-index-app" skills.yaml
+grep -q "source: index-catalog" skills.yaml
+
+ADD_FROM_INDEX_DIR="${TMP_DIR}/add-from-index-workspace"
+mkdir -p "${ADD_FROM_INDEX_DIR}/catalog/registry/index-app" "${ADD_FROM_INDEX_DIR}/catalog/registry/index-helper"
+cd "${ADD_FROM_INDEX_DIR}"
+
+${CLI} init >/tmp/skills-add-from-index-init.log
+
+cat > catalog/registry/index-app/SKILL.md <<'EOF'
+# index app
+EOF
+
+cat > catalog/registry/index-app/skill.yaml <<'EOF'
+schema: skill/v1
+id: acme/index-app
+name: Index App
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+dependencies:
+  - id: acme/index-helper
+    version: ^1.0.0
+EOF
+
+cat > catalog/registry/index-helper/SKILL.md <<'EOF'
+# index helper
+EOF
+
+cat > catalog/registry/index-helper/skill.yaml <<'EOF'
+schema: skill/v1
+id: acme/index-helper
+name: Index Helper
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > catalog/skills-index.yaml <<'EOF'
+schema: skills-index/v1
+skills:
+  - id: acme/index-app
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/index-app
+  - id: acme/index-helper
+    versions:
+      1.0.0:
+        artifact:
+          type: path
+          url: ./registry/index-helper
+EOF
+
+${CLI} add acme/index-app@^1.0.0 --from ./catalog >/tmp/skills-add-from-index.log
+grep -q "name: index-catalog" skills.yaml
+grep -q "type: index" skills.yaml
+grep -q "url: ./catalog/skills-index.yaml" skills.yaml
+grep -q "source: index-catalog" skills.yaml
+${CLI} install >/tmp/skills-add-from-index-install.log
+test -d .skills/installed/acme__index-app@1.0.0
+test -d .skills/installed/acme__index-helper@1.0.0
+
+ADD_FROM_GIT_DIR="${TMP_DIR}/add-from-git-workspace"
+mkdir -p "${ADD_FROM_GIT_DIR}"
+cd "${ADD_FROM_GIT_DIR}"
+
+${CLI} init >/tmp/skills-add-from-git-init.log
+cp skills.yaml skills.before.add-from-git.yaml
+set +e
+${CLI} add acme/git-app --from ssh://github.com/example/public-skills.git >/tmp/skills-add-from-git-invalid.log 2>&1
+ADD_FROM_GIT_INVALID_EXIT=$?
+set -e
+test "${ADD_FROM_GIT_INVALID_EXIT}" -eq 2
+grep -q "Phase 1 only supports public anonymous HTTPS git sources" /tmp/skills-add-from-git-invalid.log
+cmp -s skills.before.add-from-git.yaml skills.yaml
+
+${CLI} add acme/git-app@^1.0.0 --from https://github.com/example/public-skills.git >/tmp/skills-add-from-git.log
+${CLI} add acme/git-helper@^1.0.0 --from https://github.com/example/public-skills.git >/tmp/skills-add-from-git-2.log
+grep -q "name: git-github-com-example-public-skills" skills.yaml
+grep -q "type: git" skills.yaml
+grep -q "url: https://github.com/example/public-skills.git" skills.yaml
+test "$(grep -c 'type: git' skills.yaml)" -eq 1
+test "$(grep -c 'source: git-github-com-example-public-skills' skills.yaml)" -eq 2
+
+PROVIDER_GITHUB_SOURCE_DIR="${TMP_DIR}/provider-github-source"
+PROVIDER_GITHUB_DOCROOT="${TMP_DIR}/provider-github-docroot"
+PROVIDER_GITHUB_CERT_DIR="${TMP_DIR}/provider-github-cert"
+PROVIDER_GITHUB_BARE_REPO="${PROVIDER_GITHUB_DOCROOT}/acme/provider-skills.git"
+PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR="${TMP_DIR}/provider-github-ambiguous-source"
+PROVIDER_GITHUB_AMBIGUOUS_BARE_REPO="${PROVIDER_GITHUB_DOCROOT}/acme/ambiguous-provider.git"
+mkdir -p \
+  "${PROVIDER_GITHUB_SOURCE_DIR}/catalog/frontend-design" \
+  "${PROVIDER_GITHUB_SOURCE_DIR}/catalog/frontend-helper" \
+  "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}/catalog/a/frontend-design" \
+  "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}/catalog/b/frontend-design" \
+  "${PROVIDER_GITHUB_DOCROOT}/acme" \
+  "${PROVIDER_GITHUB_CERT_DIR}"
+
+cat > "${PROVIDER_GITHUB_SOURCE_DIR}/catalog/frontend-design/SKILL.md" <<'EOF'
+# provider frontend design
+EOF
+
+cat > "${PROVIDER_GITHUB_SOURCE_DIR}/catalog/frontend-design/skill.yaml" <<'EOF'
+schema: skill/v1
+id: acme/frontend-design
+name: Frontend Design
+version: 1.4.0
+package:
+  type: dir
+  entry: ./
+dependencies:
+  - id: acme/frontend-helper
+    version: ^0.5.0
+EOF
+
+cat > "${PROVIDER_GITHUB_SOURCE_DIR}/catalog/frontend-helper/SKILL.md" <<'EOF'
+# provider frontend helper
+EOF
+
+cat > "${PROVIDER_GITHUB_SOURCE_DIR}/catalog/frontend-helper/skill.yaml" <<'EOF'
+schema: skill/v1
+id: acme/frontend-helper
+name: Frontend Helper
+version: 0.5.2
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}/catalog/a/frontend-design/SKILL.md" <<'EOF'
+# ambiguous provider frontend design A
+EOF
+
+cat > "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}/catalog/a/frontend-design/skill.yaml" <<'EOF'
+schema: skill/v1
+id: acme/frontend-design-a
+name: Frontend Design A
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+cat > "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}/catalog/b/frontend-design/SKILL.md" <<'EOF'
+# ambiguous provider frontend design B
+EOF
+
+cat > "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}/catalog/b/frontend-design/skill.yaml" <<'EOF'
+schema: skill/v1
+id: acme/frontend-design-b
+name: Frontend Design B
+version: 1.0.0
+package:
+  type: dir
+  entry: ./
+EOF
+
+git -C "${PROVIDER_GITHUB_SOURCE_DIR}" init >/tmp/provider-github-init.log 2>&1
+git -C "${PROVIDER_GITHUB_SOURCE_DIR}" config user.name "Smoke Test"
+git -C "${PROVIDER_GITHUB_SOURCE_DIR}" config user.email "smoke@example.com"
+git -C "${PROVIDER_GITHUB_SOURCE_DIR}" add catalog
+git -C "${PROVIDER_GITHUB_SOURCE_DIR}" commit -m "seed provider repo" >/tmp/provider-github-commit.log 2>&1
+git clone --bare "${PROVIDER_GITHUB_SOURCE_DIR}" "${PROVIDER_GITHUB_BARE_REPO}" >/tmp/provider-github-bare.log 2>&1
+git -C "${PROVIDER_GITHUB_BARE_REPO}" update-server-info >/tmp/provider-github-server-info.log 2>&1
+
+git -C "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}" init >/tmp/provider-github-ambiguous-init.log 2>&1
+git -C "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}" config user.name "Smoke Test"
+git -C "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}" config user.email "smoke@example.com"
+git -C "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}" add catalog
+git -C "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}" commit -m "seed ambiguous provider repo" >/tmp/provider-github-ambiguous-commit.log 2>&1
+git clone --bare "${PROVIDER_GITHUB_AMBIGUOUS_SOURCE_DIR}" "${PROVIDER_GITHUB_AMBIGUOUS_BARE_REPO}" >/tmp/provider-github-ambiguous-bare.log 2>&1
+git -C "${PROVIDER_GITHUB_AMBIGUOUS_BARE_REPO}" update-server-info >/tmp/provider-github-ambiguous-server-info.log 2>&1
+
+cat > "${PROVIDER_GITHUB_CERT_DIR}/openssl.cnf" <<'EOF'
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+x509_extensions = v3_req
+
+[dn]
+CN = github.com
+
+[v3_req]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = github.com
+EOF
+
+openssl req -x509 -nodes -newkey rsa:2048 \
+  -keyout "${PROVIDER_GITHUB_CERT_DIR}/key.pem" \
+  -out "${PROVIDER_GITHUB_CERT_DIR}/cert.pem" \
+  -days 1 \
+  -config "${PROVIDER_GITHUB_CERT_DIR}/openssl.cnf" >/tmp/provider-github-cert.log 2>&1
+
+unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY all_proxy
+export NO_PROXY="github.com,127.0.0.1,localhost"
+export no_proxy="${NO_PROXY}"
+export SSL_CERT_FILE="${PROVIDER_GITHUB_CERT_DIR}/cert.pem"
+export CURL_CA_BUNDLE="${PROVIDER_GITHUB_CERT_DIR}/cert.pem"
+PROVIDER_GITHUB_HOSTS_BACKUP="${TMP_DIR}/provider-github-hosts.backup"
+cp /etc/hosts "${PROVIDER_GITHUB_HOSTS_BACKUP}"
+printf '\n127.0.0.1 github.com\n' >> /etc/hosts
+start_provider_github_server \
+  "${PROVIDER_GITHUB_DOCROOT}" \
+  "${PROVIDER_GITHUB_CERT_DIR}/cert.pem" \
+  "${PROVIDER_GITHUB_CERT_DIR}/key.pem"
+
+git -c "http.sslCAInfo=${PROVIDER_GITHUB_CERT_DIR}/cert.pem" clone https://github.com/acme/provider-skills.git "${TMP_DIR}/provider-github-control-clone" \
+  >/tmp/provider-github-control-clone.log 2>&1
+test -f "${TMP_DIR}/provider-github-control-clone/catalog/frontend-design/SKILL.md"
+
+PROVIDER_ADD_SUCCESS_DIR="${TMP_DIR}/provider-add-success-workspace"
+mkdir -p "${PROVIDER_ADD_SUCCESS_DIR}"
+cd "${PROVIDER_ADD_SUCCESS_DIR}"
+${CLI} init >/tmp/provider-add-success-init.log
+${CLI} add skills.sh:acme/provider-skills/frontend-design >/tmp/provider-add-success-add.log
+grep -q "id: acme/frontend-design" skills.yaml
+grep -q "type: git" skills.yaml
+grep -q "url: https://github.com/acme/provider-skills.git" skills.yaml
+grep -q "kind: skills.sh" skills.yaml
+grep -q "provider_ref: skills.sh:acme/provider-skills/frontend-design" skills.yaml
+${CLI} install >/tmp/provider-add-success-install.log
+test -d .skills/installed/acme__frontend-design@1.4.0
+test -d .skills/installed/acme__frontend-helper@0.5.2
+
+PROVIDER_ADD_ALIAS_DIR="${TMP_DIR}/provider-add-alias-workspace"
+mkdir -p "${PROVIDER_ADD_ALIAS_DIR}"
+cd "${PROVIDER_ADD_ALIAS_DIR}"
+${CLI} init >/tmp/provider-add-alias-init.log
+${CLI} add clawhub:acme/provider-skills/frontend-helper >/tmp/provider-add-alias-add.log
+grep -q "id: acme/frontend-helper" skills.yaml
+grep -q "url: https://github.com/acme/provider-skills.git" skills.yaml
+grep -q "kind: clawhub" skills.yaml
+grep -q "provider_ref: clawhub:acme/provider-skills/frontend-helper" skills.yaml
+
+PROVIDER_ADD_FULL_URL_DIR="${TMP_DIR}/provider-add-full-url-workspace"
+mkdir -p "${PROVIDER_ADD_FULL_URL_DIR}"
+cd "${PROVIDER_ADD_FULL_URL_DIR}"
+${CLI} init >/tmp/provider-add-full-url-init.log
+${CLI} add https://skills.sh/acme/provider-skills/frontend-helper >/tmp/provider-add-full-url-add.log
+grep -q "id: acme/frontend-helper" skills.yaml
+grep -q "url: https://github.com/acme/provider-skills.git" skills.yaml
+grep -q "kind: skills.sh" skills.yaml
+grep -q "provider_ref: skills.sh:acme/provider-skills/frontend-helper" skills.yaml
+
+PROVIDER_SOURCE_DEDUPE_DIR="${TMP_DIR}/provider-source-dedupe-workspace"
+mkdir -p "${PROVIDER_SOURCE_DEDUPE_DIR}"
+cd "${PROVIDER_SOURCE_DEDUPE_DIR}"
+${CLI} init >/tmp/provider-source-dedupe-init.log
+${CLI} add acme/frontend-design --from https://github.com/acme/provider-skills.git --source plain-provider-repo >/tmp/provider-source-dedupe-plain-add.log
+${CLI} add skills.sh:acme/provider-skills/frontend-helper --source provider-provider-repo >/tmp/provider-source-dedupe-provider-add.log
+grep -q "name: plain-provider-repo" skills.yaml
+grep -q "name: provider-provider-repo" skills.yaml
+test "$(grep -c "url: https://github.com/acme/provider-skills.git" skills.yaml)" -eq 2
+grep -q "kind: skills.sh" skills.yaml
+
+PROVIDER_PLAIN_GIT_STRICT_DIR="${TMP_DIR}/provider-plain-git-strict-workspace"
+mkdir -p "${PROVIDER_PLAIN_GIT_STRICT_DIR}"
+cd "${PROVIDER_PLAIN_GIT_STRICT_DIR}"
+${CLI} init >/tmp/provider-plain-git-strict-init.log
+${CLI} add acme/frontend-design --from https://github.com/acme/provider-skills.git >/tmp/provider-plain-git-strict-add.log
+set +e
+${CLI} install >/tmp/provider-plain-git-strict-install.log 2>&1
+PROVIDER_PLAIN_GIT_STRICT_EXIT=$?
+set -e
+test "${PROVIDER_PLAIN_GIT_STRICT_EXIT}" -eq 3
+grep -q "Skill acme/frontend-design was not found in git source layout skills/<id>/<version>" /tmp/provider-plain-git-strict-install.log
+
+PROVIDER_ADD_INVALID_DIR="${TMP_DIR}/provider-add-invalid-workspace"
+mkdir -p "${PROVIDER_ADD_INVALID_DIR}"
+cd "${PROVIDER_ADD_INVALID_DIR}"
+${CLI} init >/tmp/provider-add-invalid-init.log
+cp skills.yaml skills.before.provider-invalid.yaml
+set +e
+${CLI} add skills.sh:acme/provider-skills >/tmp/provider-add-invalid.log 2>&1
+PROVIDER_ADD_INVALID_EXIT=$?
+set -e
+test "${PROVIDER_ADD_INVALID_EXIT}" -eq 2
+grep -q "Use skills.sh:owner/repo/skill" /tmp/provider-add-invalid.log
+cmp -s skills.before.provider-invalid.yaml skills.yaml
+
+cp skills.yaml skills.before.provider-from-invalid.yaml
+set +e
+${CLI} add acme/frontend-design --from skills.sh:acme/provider-skills/frontend-design >/tmp/provider-add-from-invalid.log 2>&1
+PROVIDER_ADD_FROM_INVALID_EXIT=$?
+set -e
+test "${PROVIDER_ADD_FROM_INVALID_EXIT}" -eq 2
+grep -q "accepted as the <skill> argument, not with --from" /tmp/provider-add-from-invalid.log
+cmp -s skills.before.provider-from-invalid.yaml skills.yaml
+
+PROVIDER_ADD_AMBIGUOUS_DIR="${TMP_DIR}/provider-add-ambiguous-workspace"
+mkdir -p "${PROVIDER_ADD_AMBIGUOUS_DIR}"
+cd "${PROVIDER_ADD_AMBIGUOUS_DIR}"
+${CLI} init >/tmp/provider-add-ambiguous-init.log
+set +e
+${CLI} add skills.sh:acme/ambiguous-provider/frontend-design >/tmp/provider-add-ambiguous.log 2>&1
+PROVIDER_ADD_AMBIGUOUS_EXIT=$?
+set -e
+test "${PROVIDER_ADD_AMBIGUOUS_EXIT}" -eq 3
+grep -q "Skill frontend-design is ambiguous in git source" /tmp/provider-add-ambiguous.log
+
+cd "${WORK_DIR}"
 
 mkdir -p registry/dep registry/app local-skills/local-check
 
@@ -680,6 +1142,8 @@ check_invalid_git_source_url "scp" "git@github.com:example/public-skills.git" "S
 check_invalid_git_source_url "credentials" "https://token@github.com/example/public-skills.git" "embedded credentials are not allowed"
 check_invalid_git_source_url "query" "https://github.com/example/public-skills.git?ref=main" "Query strings are not allowed in Phase 1"
 check_invalid_git_source_url "fragment" "https://github.com/example/public-skills.git#main" "URL fragments are not allowed in Phase 1"
+check_invalid_git_source_url "provider-ref" "skills.sh:example/public-skills/frontend-design" "Canonical provider refs are resolved through \`skillspm add <provider-ref>\`"
+check_invalid_git_source_url "provider-url" "https://skills.sh/example/public-skills/frontend-design" "Canonical provider refs are resolved through \`skillspm add <provider-ref>\`"
 
 HTTPS_GIT_SOURCE_DIR="${TMP_DIR}/git-source-https-workspace"
 mkdir -p "${HTTPS_GIT_SOURCE_DIR}"
@@ -880,6 +1344,78 @@ grep -q 'type: pack' skills.lock
 ${CLI} list --resolved --json >/tmp/skills-pack-list-resolved.json
 grep -q '"id": "local/packed-app"' /tmp/skills-pack-list-resolved.json
 grep -q '"path": ".*imported-pack/skills/local__packed-app@1.1.0"' /tmp/skills-pack-list-resolved.json
+
+PROVIDER_REF_MISMATCH_DIR="${TMP_DIR}/provider-ref-mismatch-workspace"
+mkdir -p "${PROVIDER_REF_MISMATCH_DIR}"
+cd "${PROVIDER_REF_MISMATCH_DIR}"
+${CLI} init >/tmp/provider-ref-mismatch-init.log
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: provider-ref-mismatch
+sources:
+  - name: provider-source
+    type: git
+    url: https://github.com/acme/provider-skills/
+    provider:
+      kind: skills.sh
+skills:
+  - id: acme/frontend-design
+    source: provider-source
+    provider_ref: skills.sh:acme/other-repo/frontend-design
+EOF
+
+set +e
+${CLI} install >/tmp/provider-ref-mismatch-install.log 2>&1
+PROVIDER_REF_MISMATCH_EXIT=$?
+set -e
+test "${PROVIDER_REF_MISMATCH_EXIT}" -eq 2
+grep -q 'provider_ref repo acme/other-repo does not match source provider-source repo acme/provider-skills' /tmp/provider-ref-mismatch-install.log
+
+PACK_INVALID_PROVIDER_KIND_DIR="${TMP_DIR}/pack-invalid-provider-kind-workspace"
+mkdir -p "${PACK_INVALID_PROVIDER_KIND_DIR}/imported-pack/skills/acme__provider-pack@1.0.0"
+cd "${PACK_INVALID_PROVIDER_KIND_DIR}"
+${CLI} init >/tmp/pack-invalid-provider-kind-init.log
+
+cat > imported-pack/skills/acme__provider-pack@1.0.0/SKILL.md <<'EOF'
+# invalid provider pack
+EOF
+
+cat > imported-pack/pack.yaml <<'EOF'
+schema: skills-pack/v1
+generated_at: 2026-03-15T00:00:00.000Z
+resolved:
+  acme/provider-pack:
+    version: 1.0.0
+    source:
+      type: git
+      url: https://github.com/acme/provider-skills.git
+      revision: abc123
+      provider:
+        kind: not-a-provider
+EOF
+
+cat > skills.yaml <<'EOF'
+schema: skills/v1
+project:
+  name: pack-invalid-provider-kind
+packs:
+  - name: imported
+    path: ./imported-pack
+skills:
+  - id: acme/provider-pack
+    version: 1.0.0
+EOF
+
+set +e
+${CLI} install >/tmp/pack-invalid-provider-kind-install.log 2>&1
+PACK_INVALID_PROVIDER_KIND_EXIT=$?
+set -e
+test "${PACK_INVALID_PROVIDER_KIND_EXIT}" -eq 2
+grep -q 'resolved.acme/provider-pack.source.provider.kind must be skills.sh or clawhub' /tmp/pack-invalid-provider-kind-install.log
+
+cd "${WORK_DIR}"
 
 PACK_SHADOW_PACK_SOURCE_DIR="${TMP_DIR}/pack-shadow-pack-source"
 PACK_SHADOW_RESTORE_DIR="${TMP_DIR}/pack-shadow-restore-workspace"

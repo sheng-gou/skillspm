@@ -1,9 +1,25 @@
 import path from "node:path";
 import semver from "semver";
 import { CliError } from "./errors";
-import { validatePhase1GitSourceUrl } from "./git-source";
-import type { ManifestPack, ManifestSkill, ManifestSource, ManifestTarget, SkillsManifest } from "./types";
+import {
+  parseCanonicalProviderSkillReference,
+  validatePhase1GitSourceUrl
+} from "./git-source";
+import type {
+  ManifestPack,
+  ManifestSkill,
+  ManifestSource,
+  ManifestSourceProvider,
+  ManifestTarget,
+  SkillsManifest
+} from "./types";
 import { MANIFEST_FILE, exists, readDocument, writeYamlDocument } from "./utils";
+
+interface GithubRepoIdentity {
+  owner: string;
+  repo: string;
+  canonical: string;
+}
 
 const SUPPORTED_RANGE_PATTERN = /^(?:\d+\.\d+\.\d+|\^\d+\.\d+\.\d+|~\d+\.\d+\.\d+)$/;
 
@@ -53,8 +69,9 @@ export function validateManifest(manifest: unknown): SkillsManifest {
   }
 
   const sourceNames = new Set<string>();
+  const sourceMap = new Map<string, ManifestSource>();
   for (const source of value.sources ?? []) {
-    validateSource(source, errors, sourceNames);
+    validateSource(source, errors, sourceNames, sourceMap);
   }
 
   const packNames = new Set<string>();
@@ -68,7 +85,7 @@ export function validateManifest(manifest: unknown): SkillsManifest {
 
   const rootIds = new Set<string>();
   for (const skill of value.skills ?? []) {
-    validateManifestSkill(skill, errors);
+    validateManifestSkill(skill, errors, sourceMap);
     if (typeof skill.id === "string") {
       if (rootIds.has(skill.id)) {
         errors.push(`duplicate root skill id ${skill.id}`);
@@ -87,7 +104,12 @@ export function validateManifest(manifest: unknown): SkillsManifest {
   return value as SkillsManifest;
 }
 
-function validateSource(source: Partial<ManifestSource>, errors: string[], sourceNames: Set<string>): void {
+function validateSource(
+  source: Partial<ManifestSource>,
+  errors: string[],
+  sourceNames: Set<string>,
+  sourceMap: Map<string, ManifestSource>
+): void {
   if (!source || typeof source !== "object") {
     errors.push("sources entries must be objects");
     return;
@@ -110,6 +132,29 @@ function validateSource(source: Partial<ManifestSource>, errors: string[], sourc
       errors.push(`source ${source.name ?? "<unknown>"} url is invalid: ${sourceUrlError}`);
     }
   }
+
+  if (source.provider !== undefined) {
+    validateSourceProvider(source, errors);
+  }
+
+  if (source.type === "index" && source.provider !== undefined) {
+    errors.push(`source ${source.name ?? "<unknown>"} provider is only supported for git sources`);
+  }
+
+  if (typeof source.name === "string") {
+    sourceMap.set(source.name, source as ManifestSource);
+  }
+}
+
+function validateSourceProvider(source: Partial<ManifestSource>, errors: string[]): void {
+  const provider = source.provider as Partial<ManifestSourceProvider> | undefined;
+  if (!provider || typeof provider !== "object" || Array.isArray(provider)) {
+    errors.push(`source ${source.name ?? "<unknown>"} provider must be an object`);
+    return;
+  }
+  if (provider.kind !== "skills.sh" && provider.kind !== "clawhub") {
+    errors.push(`source ${source.name ?? "<unknown>"} provider.kind must be skills.sh or clawhub`);
+  }
 }
 
 function validatePack(pack: Partial<ManifestPack>, errors: string[], packNames: Set<string>): void {
@@ -129,7 +174,11 @@ function validatePack(pack: Partial<ManifestPack>, errors: string[], packNames: 
   }
 }
 
-function validateManifestSkill(skill: Partial<ManifestSkill>, errors: string[]): void {
+function validateManifestSkill(
+  skill: Partial<ManifestSkill>,
+  errors: string[],
+  sourceMap: Map<string, ManifestSource>
+): void {
   if (!skill || typeof skill !== "object") {
     errors.push("skills entries must be objects");
     return;
@@ -143,6 +192,9 @@ function validateManifestSkill(skill: Partial<ManifestSkill>, errors: string[]):
   if (skill.source !== undefined && typeof skill.source !== "string") {
     errors.push(`skill ${skill.id ?? "<unknown>"} source must be a string`);
   }
+  if (skill.provider_ref !== undefined && typeof skill.provider_ref !== "string") {
+    errors.push(`skill ${skill.id ?? "<unknown>"} provider_ref must be a string`);
+  }
   if (skill.version !== undefined) {
     if (typeof skill.version !== "string") {
       errors.push(`skill ${skill.id ?? "<unknown>"} version must be a string`);
@@ -150,6 +202,78 @@ function validateManifestSkill(skill: Partial<ManifestSkill>, errors: string[]):
       errors.push(`skill ${skill.id ?? "<unknown>"} version must be exact, caret, or tilde semver`);
     }
   }
+
+  if (skill.path !== undefined && skill.source !== undefined) {
+    errors.push(`skill ${skill.id ?? "<unknown>"} cannot declare both path and source`);
+  }
+  if (skill.provider_ref !== undefined) {
+    if (skill.path !== undefined) {
+      errors.push(`skill ${skill.id ?? "<unknown>"} cannot declare provider_ref together with path`);
+    }
+    if (!skill.source) {
+      errors.push(`skill ${skill.id ?? "<unknown>"} provider_ref requires source`);
+    } else {
+      const source = sourceMap.get(skill.source);
+      if (source && (source.type !== "git" || !source.provider)) {
+        errors.push(`skill ${skill.id ?? "<unknown>"} provider_ref requires a git source with provider.kind`);
+      }
+      const parsedProviderRef = parseCanonicalProviderSkillReference(skill.provider_ref);
+      if (typeof parsedProviderRef === "string") {
+        errors.push(`skill ${skill.id ?? "<unknown>"} provider_ref is invalid: ${parsedProviderRef}`);
+      } else if (!parsedProviderRef) {
+        errors.push(`skill ${skill.id ?? "<unknown>"} provider_ref must be a canonical skills.sh/clawhub ref`);
+      } else {
+        if (source?.provider?.kind && source.provider.kind !== parsedProviderRef.provider) {
+          errors.push(
+            `skill ${skill.id ?? "<unknown>"} provider_ref provider ${parsedProviderRef.provider} does not match source ${source.name} provider ${source.provider.kind}`
+          );
+        }
+        if (source?.url) {
+          const sourceRepo = normalizeGithubRepoIdentity(source.url);
+          if (!sourceRepo) {
+            errors.push(`skill ${skill.id ?? "<unknown>"} provider_ref requires source ${source.name} url to point at https://github.com/<owner>/<repo>[.git]`);
+          } else if (sourceRepo.canonical !== canonicalGithubRepoIdentity(parsedProviderRef.owner, parsedProviderRef.repo)) {
+            errors.push(
+              `skill ${skill.id ?? "<unknown>"} provider_ref repo ${parsedProviderRef.owner}/${parsedProviderRef.repo} does not match source ${source.name} repo ${sourceRepo.owner}/${sourceRepo.repo}`
+            );
+          }
+        }
+      }
+    }
+  }
+}
+
+function normalizeGithubRepoIdentity(url: string): GithubRepoIdentity | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.hostname.toLowerCase() !== "github.com") {
+    return undefined;
+  }
+
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  if (segments.length !== 2) {
+    return undefined;
+  }
+
+  const owner = segments[0].trim();
+  const repo = segments[1].replace(/\.git$/i, "").trim();
+  if (!owner || !repo) {
+    return undefined;
+  }
+
+  return {
+    owner,
+    repo,
+    canonical: canonicalGithubRepoIdentity(owner, repo)
+  };
+}
+
+function canonicalGithubRepoIdentity(owner: string, repo: string): string {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}`;
 }
 
 function validateTarget(target: Partial<ManifestTarget>, errors: string[]): void {

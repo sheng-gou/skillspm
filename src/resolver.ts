@@ -1,7 +1,7 @@
 import path from "node:path";
 import semver from "semver";
 import { CliError } from "./errors";
-import { findMatchingGitSkillVersion, loadGitSource } from "./git-source";
+import { findMatchingProviderBackedGitSkillVersion, findMatchingStrictGitSkillVersion, loadGitSource, providerKindsEqual } from "./git-source";
 import { loadIndex, findMatchingIndexVersion, resolveIndexArtifactRoot } from "./index-source";
 import { loadManifest } from "./manifest";
 import { PACK_SKILLS_DIR, findPackNode, loadManifestPacks } from "./pack";
@@ -180,7 +180,9 @@ async function resolveGitSkill(
   preferredPack?: LoadedPack
 ): Promise<void> {
   const loadedSource = await getLoadedGitSource(context, source);
-  const { version, skillRoot } = await findMatchingGitSkillVersion(loadedSource.path, manifestSkill.id, manifestSkill.version);
+  const { version, skillRoot } = source.provider
+    ? await findMatchingProviderBackedGitSkillVersion(loadedSource.path, manifestSkill.id, manifestSkill.version, manifestSkill.provider_ref)
+    : await findMatchingStrictGitSkillVersion(loadedSource.path, manifestSkill.id, manifestSkill.version);
   if (!(await isDirectory(skillRoot))) {
     throw new CliError(`Git skill path for ${manifestSkill.id}@${version} does not exist: ${skillRoot}`, 4);
   }
@@ -201,7 +203,8 @@ async function resolveGitSkill(
       type: "git",
       name: source.name,
       url: source.url,
-      revision: loadedSource.revision
+      revision: loadedSource.revision,
+      ...(source.provider ? { provider: source.provider } : {})
     },
     artifact: {
       type: "path",
@@ -454,7 +457,9 @@ function isPackSourceCompatible(
     return false;
   }
   if (selectedSource.type === "git") {
-    return Boolean(selectedSource.revision) && selectedSource.revision === packSource.revision;
+    return providerKindsEqual(selectedSource.provider, packSource.provider)
+      && Boolean(selectedSource.revision)
+      && selectedSource.revision === packSource.revision;
   }
   return true;
 }

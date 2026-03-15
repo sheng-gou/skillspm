@@ -101,6 +101,32 @@ function validatePackManifest(raw: unknown, sourceLabel: string): SkillsPack {
     if (node.dependencies !== undefined && (!Array.isArray(node.dependencies) || node.dependencies.some((dependency) => typeof dependency !== "string"))) {
       errors.push(`resolved.${skillId}.dependencies must be an array of strings`);
     }
+    if (node.source !== undefined && (typeof node.source !== "object" || node.source === null || Array.isArray(node.source))) {
+      errors.push(`resolved.${skillId}.source must be an object`);
+    } else if (node.source) {
+      if (node.source.type !== "index" && node.source.type !== "git" && node.source.type !== "path") {
+        errors.push(`resolved.${skillId}.source.type has unsupported value`);
+      }
+      if (node.source.name !== undefined && typeof node.source.name !== "string") {
+        errors.push(`resolved.${skillId}.source.name must be a string`);
+      }
+      if (node.source.url !== undefined && typeof node.source.url !== "string") {
+        errors.push(`resolved.${skillId}.source.url must be a string`);
+      }
+      if (node.source.revision !== undefined && typeof node.source.revision !== "string") {
+        errors.push(`resolved.${skillId}.source.revision must be a string`);
+      }
+      if (node.source.provider !== undefined && (typeof node.source.provider !== "object" || node.source.provider === null || Array.isArray(node.source.provider))) {
+        errors.push(`resolved.${skillId}.source.provider must be an object`);
+      } else if (node.source.provider) {
+        if (node.source.type !== "git") {
+          errors.push(`resolved.${skillId}.source.provider is only supported for git sources`);
+        }
+        if (node.source.provider.kind !== "skills.sh" && node.source.provider.kind !== "clawhub") {
+          errors.push(`resolved.${skillId}.source.provider.kind must be skills.sh or clawhub`);
+        }
+      }
+    }
   }
 
   if (errors.length > 0) {

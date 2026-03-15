@@ -5,6 +5,17 @@ import { fileURLToPath } from "node:url";
 import { readFile, writeFile } from "node:fs/promises";
 import { stringify as stringifyYaml } from "yaml";
 import { syncTargets } from "./adapter";
+import {
+  CANONICAL_PROVIDER_REF_USAGE,
+  findMatchingProviderBackedGitSkillVersion,
+  loadGitSource,
+  providerKindsEqual,
+  looksLikeExplicitGitSourceUrl,
+  looksLikeCanonicalProviderSkillReference,
+  parseCanonicalProviderSkillReference,
+  validatePhase1GitSourceUrl
+} from "./git-source";
+import { loadIndex } from "./index-source";
 import { loadLockfile } from "./lockfile";
 import { runDoctor } from "./doctor";
 import { CliError } from "./errors";
@@ -18,14 +29,16 @@ import { resolveProject } from "./resolver";
 import { formatScopeLabel, resolveScopeLayout, resolveStateContainmentRoot } from "./scope";
 import type { ScopeLayout } from "./scope";
 import { loadSkillMetadata, validateSkillMetadata } from "./skill";
-import type { ManifestSource, ManifestTarget, SkillMetadata, SkillsLock, SkillsManifest, TargetType } from "./types";
+import type { ManifestSkill, ManifestSource, ManifestTarget, SkillMetadata, SkillsLock, SkillsManifest, TargetType } from "./types";
 import {
   MANIFEST_FILE,
   assertConfiguredPathWithinRootReal,
   assertPathWithinRootReal,
+  assertSkillRootMarker,
   ensureDir,
   exists,
   formatSkillVersion,
+  hasSkillRootMarker,
   isDirectory,
   normalizeRelativePath,
   printError,
@@ -83,18 +96,28 @@ export async function runCli(argv: string[]): Promise<number> {
   withScopeOption(
     program
       .command("add")
-      .description("Add a root skill to skills.yaml")
-      .argument("<skill>", "Skill id@range or local path")
-      .option("--source <name>", "Source name for index-backed skills")
+      .description("Add a local, provider-backed, or source-backed root skill to skills.yaml")
+      .argument("[skill]", "Skill id@range, canonical skills.sh/clawhub ref, or omit when --from points to one local skill directory")
+      .option("--source <name>", "Source name to use or reuse for source-backed skills")
+      .option("--from <source>", "Local skill dir or public anonymous HTTPS git repo; explicit local index/catalog is advanced")
       .option("--install", "Run install after writing skills.yaml")
-  ).action(async (input: string, options: { source?: string; install?: boolean; global?: boolean }) => {
-    const layout = resolveScopeLayout(process.cwd(), options.global);
+  ).action(
+    async (
+      skillOrOptions: string | { source?: string; from?: string; install?: boolean; global?: boolean } | undefined,
+      options?: { source?: string; from?: string; install?: boolean; global?: boolean }
+    ) => {
+    const input = typeof skillOrOptions === "string" ? skillOrOptions : undefined;
+    const normalizedOptions = typeof skillOrOptions === "string" ? options ?? {} : skillOrOptions ?? {};
+    const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
     const manifest = await loadManifest(layout.rootDir);
-    const nextManifest = await addSkillToManifest(process.cwd(), layout, manifest, input, options.source);
+    const nextManifest = await addSkillToManifest(process.cwd(), layout, manifest, input, {
+      sourceName: normalizedOptions.source,
+      from: normalizedOptions.from
+    });
     await saveManifest(layout.rootDir, nextManifest);
     const added = nextManifest.skills[nextManifest.skills.length - 1];
     printSuccess(`Added skill ${describeManifestSkill(added)} to ${layout.scope} skills.yaml`);
-    if (options.install) {
+    if (normalizedOptions.install) {
       await runInstallCommand(layout);
     }
   });
@@ -343,16 +366,65 @@ function withScopeOption(command: Command): Command {
   return command.option("-g, --global", "Use ~/.skills instead of the current project");
 }
 
+interface AddSkillOptions {
+  sourceName?: string;
+  from?: string;
+}
+
+type AddFromResolution =
+  | {
+      kind: "local-skill";
+      absolutePath: string;
+      metadata?: SkillMetadata;
+    }
+  | {
+      kind: "manifest-source";
+      source: Omit<ManifestSource, "name">;
+    };
+
 async function addSkillToManifest(
   commandCwd: string,
   layout: ScopeLayout,
   manifest: SkillsManifest,
-  input: string,
-  sourceName?: string
+  input: string | undefined,
+  options: AddSkillOptions = {}
 ): Promise<SkillsManifest> {
-  const parsed = looksLikePath(input) ? undefined : parseSkillSpecifier(input);
-  const nextSkills = manifest.skills.filter((skill) => skill.id !== parsed?.id);
+  if (options.from) {
+    const resolved = await resolveAddFromInput(commandCwd, layout, options.from);
+    if (resolved.kind === "local-skill") {
+      if (options.sourceName) {
+        throw new CliError("--source does not apply when --from points to a local skill directory.", 2);
+      }
+      validateLocalSingleSkillSelection(input, resolved.metadata, resolved.absolutePath);
+      return addLocalPathSkillToManifest(layout, manifest, resolved.absolutePath, resolved.metadata);
+    }
+    return addSourceBackedSkillToManifest(manifest, input, resolved.source, options.sourceName);
+  }
 
+  if (!input) {
+    throw new CliError("add requires <skill> or --from <source>.", 2);
+  }
+
+  const providerAddInput = await maybeResolveCanonicalProviderAddInput(layout, input);
+  if (providerAddInput) {
+    return addSourceBackedSkillToManifest(
+      manifest,
+      providerAddInput.skillId,
+      {
+        type: "git",
+        url: providerAddInput.sourceUrl,
+        provider: {
+          kind: providerAddInput.providerKind
+        }
+      },
+      options.sourceName,
+      providerAddInput.providerRef
+    );
+  }
+
+  if (options.sourceName && looksLikePath(input)) {
+    throw new CliError("--source only applies to source-backed skills.", 2);
+  }
   if (looksLikePath(input)) {
     const absolutePath = resolveFileUrlOrPath(commandCwd, input);
     await assertConfiguredPathWithinRootReal(layout.rootDir, input, absolutePath, `local skill path ${input}`);
@@ -360,21 +432,17 @@ async function addSkillToManifest(
       throw new CliError(`Local skill path does not exist: ${input}`, 2);
     }
     const metadata = await loadSkillMetadata(absolutePath);
-    const inferredId = metadata?.id ?? `local/${path.basename(absolutePath)}`;
-    const withoutExisting = nextSkills.filter((skill) => skill.id !== inferredId);
-    withoutExisting.push({ id: inferredId, path: normalizeRelativePath(layout.rootDir, absolutePath) });
-    return {
-      ...manifest,
-      skills: withoutExisting
-    };
+    return addLocalPathSkillToManifest(layout, manifest, absolutePath, metadata);
   }
 
+  const parsed = parseSkillSpecifier(input);
+  const nextSkills = manifest.skills.filter((skill) => skill.id !== parsed.id);
   const skill = { id: parsed.id } as SkillsManifest["skills"][number];
   if (parsed.version) {
     skill.version = parsed.version;
   }
-  if (sourceName) {
-    skill.source = sourceName;
+  if (options.sourceName) {
+    skill.source = options.sourceName;
   }
   nextSkills.push(skill);
 
@@ -382,6 +450,329 @@ async function addSkillToManifest(
     ...manifest,
     skills: nextSkills
   };
+}
+
+interface ResolvedProviderAddInput {
+  skillId: string;
+  sourceUrl: string;
+  providerKind: "skills.sh" | "clawhub";
+  providerRef: string;
+}
+
+async function maybeResolveCanonicalProviderAddInput(
+  layout: ScopeLayout,
+  input: string
+): Promise<ResolvedProviderAddInput | undefined> {
+  const parsed = parseCanonicalProviderSkillReference(input);
+  if (typeof parsed === "string") {
+    throw new CliError(`Unable to add provider ref ${input}: ${parsed}`, 2);
+  }
+  if (!parsed) {
+    return undefined;
+  }
+
+  const previewSource: ManifestSource = {
+    name: `provider-preview-${slugSourceName(`${parsed.owner}-${parsed.repo}`)}`,
+    type: "git",
+    url: parsed.cloneUrl
+  };
+
+  let loadedSource;
+  try {
+    loadedSource = await loadGitSource(path.join(layout.stateDir, "sources", "git"), previewSource);
+  } catch (error) {
+    if (error instanceof CliError) {
+      throw new CliError(`Unable to resolve provider ref ${parsed.ref}: ${error.message}`, error.exitCode);
+    }
+    throw error;
+  }
+
+  const { skillRoot } = await findMatchingProviderBackedGitSkillVersion(
+    loadedSource.path,
+    parsed.skill,
+    undefined,
+    parsed.canonicalRef
+  );
+  await assertSkillRootMarker(skillRoot, `Provider ref ${parsed.ref}`);
+
+  const metadata = await loadSkillMetadata(skillRoot);
+  if (!metadata?.id) {
+    throw new CliError(
+      `Provider ref ${parsed.ref} resolved to ${path.relative(loadedSource.path, skillRoot) || "."}, but the skill does not declare metadata.id in skill.yaml, so it cannot be added automatically.`,
+      2
+    );
+  }
+
+  return {
+    skillId: metadata.id,
+    sourceUrl: parsed.cloneUrl,
+    providerKind: parsed.provider,
+    providerRef: parsed.canonicalRef
+  };
+}
+
+async function resolveAddFromInput(commandCwd: string, layout: ScopeLayout, from: string): Promise<AddFromResolution> {
+  const providerReference = parseCanonicalProviderSkillReference(from);
+  if (typeof providerReference === "string") {
+    throw new CliError(`Unable to use --from ${from}: ${providerReference}`, 2);
+  }
+  if (providerReference || looksLikeCanonicalProviderSkillReference(from)) {
+    throw new CliError(
+      `Explicit skills.sh/clawhub refs are accepted as the <skill> argument, not with --from. Use \`skillspm add skills.sh:owner/repo/skill\`. ${CANONICAL_PROVIDER_REF_USAGE}`,
+      2
+    );
+  }
+
+  if (looksLikeExplicitGitSourceUrl(from)) {
+    const sourceUrlError = validatePhase1GitSourceUrl(from);
+    if (sourceUrlError) {
+      throw new CliError(`Unable to add source from ${from}: ${sourceUrlError}`, 2);
+    }
+    return {
+      kind: "manifest-source",
+      source: {
+        type: "git",
+        url: from.trim()
+      }
+    };
+  }
+
+  const absolutePath = resolveFileUrlOrPath(commandCwd, from);
+  await assertConfiguredPathWithinRootReal(layout.rootDir, from, absolutePath, `add source ${from}`);
+  if (!(await exists(absolutePath))) {
+    throw new CliError(`Source path does not exist: ${from}`, 2);
+  }
+
+  if (await isDirectory(absolutePath)) {
+    const skillRoot = await hasSkillRootMarker(absolutePath);
+    const indexPath = await findLocalIndexPath(absolutePath);
+
+    if (skillRoot && indexPath) {
+      throw new CliError(
+        `Source path ${from} is ambiguous: it looks like a local skill directory and also contains ${path.basename(indexPath)}. To add the skill, point --from at the exact skill directory you want. To add the index/catalog source, pass --from ${formatExplicitIndexHint(from, indexPath)}.`,
+        2
+      );
+    }
+
+    if (skillRoot) {
+      return {
+        kind: "local-skill",
+        absolutePath,
+        metadata: await loadSkillMetadata(absolutePath)
+      };
+    }
+
+    if (!indexPath) {
+      throw new CliError(
+        `Source path ${from} must be a local skill directory or contain skills-index.yaml or index.yaml.`,
+        2
+      );
+    }
+    return resolveLocalIndexSource(layout, indexPath);
+  }
+
+  return resolveLocalIndexSource(layout, absolutePath);
+}
+
+async function resolveLocalIndexSource(layout: ScopeLayout, indexPath: string): Promise<AddFromResolution> {
+  const normalizedIndexPath = normalizeRelativePath(layout.rootDir, indexPath);
+  await loadIndex(normalizedIndexPath, layout.rootDir);
+  return {
+    kind: "manifest-source",
+    source: {
+      type: "index",
+      url: normalizedIndexPath
+    }
+  };
+}
+
+async function findLocalIndexPath(directoryPath: string): Promise<string | undefined> {
+  for (const fileName of ["skills-index.yaml", "index.yaml"]) {
+    const candidatePath = path.join(directoryPath, fileName);
+    if ((await exists(candidatePath)) && !(await isDirectory(candidatePath))) {
+      return candidatePath;
+    }
+  }
+  return undefined;
+}
+
+function formatExplicitIndexHint(from: string, indexPath: string): string {
+  const trimmed = from.trim();
+  if (trimmed.startsWith("file://")) {
+    return indexPath;
+  }
+
+  const suffix = path.basename(indexPath);
+  const normalizedBase = trimmed.replace(/[\\\/]+$/u, "");
+  if (normalizedBase === "") {
+    return suffix;
+  }
+
+  const separator = normalizedBase.includes("\\") ? "\\" : "/";
+  return `${normalizedBase}${separator}${suffix}`;
+}
+
+function validateLocalSingleSkillSelection(
+  input: string | undefined,
+  metadata: SkillMetadata | undefined,
+  skillPath: string
+): void {
+  if (!input) {
+    return;
+  }
+  if (looksLikePath(input)) {
+    throw new CliError("When --from points to a local skill directory, omit <skill>.", 2);
+  }
+
+  const parsed = parseSkillSpecifier(input);
+  if (parsed.version) {
+    throw new CliError("Version ranges are not used when --from points to a local skill directory.", 2);
+  }
+
+  const inferredId = metadata?.id ?? `local/${path.basename(skillPath)}`;
+  if (parsed.id !== inferredId) {
+    throw new CliError(`Local skill directory provides ${inferredId}, not ${parsed.id}.`, 2);
+  }
+}
+
+function addLocalPathSkillToManifest(
+  layout: ScopeLayout,
+  manifest: SkillsManifest,
+  absolutePath: string,
+  metadata: SkillMetadata | undefined
+): SkillsManifest {
+  const inferredId = metadata?.id ?? `local/${path.basename(absolutePath)}`;
+  const normalizedPath = normalizeRelativePath(layout.rootDir, absolutePath);
+  const nextSkills = manifest.skills.filter((skill) => skill.id !== inferredId && skill.path !== normalizedPath);
+  nextSkills.push({ id: inferredId, path: normalizedPath });
+  return {
+    ...manifest,
+    skills: nextSkills
+  };
+}
+
+function addSourceBackedSkillToManifest(
+  manifest: SkillsManifest,
+  input: string | undefined,
+  sourceDraft: Omit<ManifestSource, "name">,
+  preferredSourceName?: string,
+  providerRef?: string
+): SkillsManifest {
+  if (!input) {
+    throw new CliError("Source-backed add requires <skill>.", 2);
+  }
+  if (looksLikePath(input)) {
+    throw new CliError("When --from points to an index or git source, <skill> must be a skill id or id@range.", 2);
+  }
+  if (providerRef && (sourceDraft.type !== "git" || !sourceDraft.provider)) {
+    throw new CliError("provider_ref can only be used with provider-backed git sources.", 2);
+  }
+
+  const parsed = parseSkillSpecifier(input);
+  const { sourceName, sources } = upsertManifestSource(manifest, sourceDraft, preferredSourceName);
+  const nextSkills = manifest.skills.filter((skill) => skill.id !== parsed.id);
+  const nextSkill: ManifestSkill = {
+    id: parsed.id,
+    ...(parsed.version ? { version: parsed.version } : {}),
+    source: sourceName,
+    ...(providerRef ? { provider_ref: providerRef } : {})
+  };
+  nextSkills.push(nextSkill);
+
+  return {
+    ...manifest,
+    sources,
+    skills: nextSkills
+  };
+}
+
+function upsertManifestSource(
+  manifest: SkillsManifest,
+  sourceDraft: Omit<ManifestSource, "name">,
+  preferredSourceName?: string
+): { sourceName: string; sources: ManifestSource[] } {
+  const currentSources = [...(manifest.sources ?? [])];
+  const existingByDefinition = currentSources.find(
+    (source) => source.type === sourceDraft.type
+      && source.url === sourceDraft.url
+      && providerKindsEqual(source.provider, sourceDraft.provider)
+  );
+  if (existingByDefinition) {
+    return {
+      sourceName: existingByDefinition.name,
+      sources: currentSources
+    };
+  }
+
+  if (preferredSourceName) {
+    const existingByName = currentSources.find((source) => source.name === preferredSourceName);
+    if (
+      existingByName
+      && (
+        existingByName.type !== sourceDraft.type
+        || existingByName.url !== sourceDraft.url
+        || !providerKindsEqual(existingByName.provider, sourceDraft.provider)
+      )
+    ) {
+      throw new CliError(`Source ${preferredSourceName} already exists with a different definition.`, 2);
+    }
+    if (existingByName) {
+      return {
+        sourceName: existingByName.name,
+        sources: currentSources
+      };
+    }
+  }
+
+  const sourceName = preferredSourceName ?? createSourceName(currentSources, sourceDraft);
+  currentSources.push({ name: sourceName, ...sourceDraft });
+  return { sourceName, sources: currentSources };
+}
+
+function createSourceName(existingSources: ManifestSource[], sourceDraft: Omit<ManifestSource, "name">): string {
+  const baseName = buildSourceNameCandidate(sourceDraft);
+  const usedNames = new Set(existingSources.map((source) => source.name));
+  let nextName = baseName;
+  let counter = 2;
+  while (usedNames.has(nextName)) {
+    nextName = `${baseName}-${counter}`;
+    counter += 1;
+  }
+  return nextName;
+}
+
+function buildSourceNameCandidate(sourceDraft: Omit<ManifestSource, "name">): string {
+  if (sourceDraft.type === "git") {
+    const providerPrefix = sourceDraft.provider ? `${sourceDraft.provider.kind}-` : "";
+    try {
+      const parsed = new URL(sourceDraft.url);
+      const pathSegments = parsed.pathname
+        .replace(/\/+$/u, "")
+        .split("/")
+        .filter(Boolean)
+        .map((segment, index, segments) => index === segments.length - 1 ? segment.replace(/\.git$/iu, "") : segment);
+      const detail = pathSegments.slice(-2).join("-") || parsed.hostname;
+      return slugSourceName(`git-${providerPrefix}${parsed.hostname}-${detail}`);
+    } catch {
+      return slugSourceName(`git-${providerPrefix}source`);
+    }
+  }
+
+  const fileStem = path.basename(sourceDraft.url, path.extname(sourceDraft.url));
+  const parentStem = path.basename(path.dirname(sourceDraft.url));
+  const detail = fileStem === "index" || fileStem === "skills-index"
+    ? (parentStem && parentStem !== "." ? parentStem : fileStem)
+    : fileStem;
+  return slugSourceName(`index-${detail || "source"}`);
+}
+
+function slugSourceName(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "source";
 }
 
 async function removeSkillFromManifest(
@@ -832,12 +1223,18 @@ function renderHelp(commandName?: string): string {
   }
   if (commandName === "add") {
     return [
-      "Usage: skillspm add <skill> [options]",
+      "Usage: skillspm add [skill] [options]",
       "",
-      "Add a root skill to skills.yaml",
+      "Add a local, provider-backed, or source-backed root skill to skills.yaml",
+      "",
+      "Examples:",
+      "  skillspm add skills.sh:owner/repo/skill",
+      "  skillspm add clawhub:owner/repo/skill",
+      "  skillspm add https://skills.sh/owner/repo/skill",
       "",
       "Options:",
-      "  --source <name>   Source name for index-backed skills",
+      "  --source <name>   Source name to use or reuse for source-backed skills",
+      "  --from <source>   Local skill dir or public anonymous HTTPS git repo; explicit local index/catalog is advanced",
       "  --install         Run install after writing skills.yaml",
       "  -g, --global      Use ~/.skills instead of the current project"
     ].join("\n");
@@ -1021,7 +1418,7 @@ function renderHelp(commandName?: string): string {
     "",
     "Manifest helpers:",
     "  init              Create a starter skills.yaml for the selected scope",
-    "  add               Add a root skill to skills.yaml",
+    "  add               Add a local or source-backed root skill to skills.yaml",
     "  remove            Remove a root skill from skills.yaml",
     "  target            Manage sync targets",
     "",
