@@ -61,9 +61,16 @@ export interface SkillsLock {
   skills: Record<string, LockedSkillEntry>;
 }
 
+export interface LibrarySkillSourceProvider {
+  name: string;
+  ref?: string;
+  visibility?: string;
+}
+
 export interface LibrarySkillSource {
   kind: "local" | "target" | "provider";
   value: string;
+  provider?: LibrarySkillSourceProvider;
 }
 
 export interface LibrarySkillVersion {

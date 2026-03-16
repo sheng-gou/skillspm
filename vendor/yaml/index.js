@@ -114,20 +114,21 @@ export function stringify(value, options = {}) {
 
   function emitObjectEntry(key, entryValue, depth) {
     const prefix = " ".repeat(depth * indentSize);
+    const formattedKey = formatKey(key);
     if (Array.isArray(entryValue)) {
       if (entryValue.length === 0) {
-        return [`${prefix}${key}: []`];
+        return [`${prefix}${formattedKey}: []`];
       }
-      return [`${prefix}${key}:`, ...entryValue.flatMap((item) => emitArrayItem(item, depth + 1))];
+      return [`${prefix}${formattedKey}:`, ...entryValue.flatMap((item) => emitArrayItem(item, depth + 1))];
     }
     if (entryValue && typeof entryValue === "object") {
       if (Object.keys(entryValue).length === 0) {
-        return [`${prefix}${key}: {}`];
+        return [`${prefix}${formattedKey}: {}`];
       }
       const nested = emit(entryValue, depth + 1);
-      return [`${prefix}${key}:`, ...nested];
+      return [`${prefix}${formattedKey}:`, ...nested];
     }
-    return [`${prefix}${key}: ${formatScalar(entryValue)}`];
+    return [`${prefix}${formattedKey}: ${formatScalar(entryValue)}`];
   }
 
   function emitArrayItem(item, depth) {
@@ -159,14 +160,29 @@ export function stringify(value, options = {}) {
 }
 
 function splitKeyValue(text) {
-  const match = /^([^:]+):(.*)$/.exec(text);
-  if (!match) {
-    return null;
+  let quote = null;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      if (char === quote && text[index - 1] !== "\\") {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (char === ":" && (index === text.length - 1 || /\s/.test(text[index + 1]))) {
+      return {
+        key: parseScalar(text.slice(0, index).trim()),
+        valueText: text.slice(index + 1).trim()
+      };
+    }
   }
-  return {
-    key: match[1].trim(),
-    valueText: match[2].trim()
-  };
+  return null;
 }
 
 function parseScalar(value) {
@@ -200,6 +216,19 @@ function formatScalar(value) {
   }
   const stringValue = String(value);
   if (stringValue === "" || /^(?:-|\?|\{|}|\[|\]|#|!|&|\*|\s)/.test(stringValue) || /\s$/.test(stringValue)) {
+    return JSON.stringify(stringValue);
+  }
+  return stringValue;
+}
+
+function formatKey(value) {
+  const stringValue = String(value);
+  if (
+    stringValue === "" ||
+    stringValue.includes(":") ||
+    /^(?:-|\?|\{|}|\[|\]|#|!|&|\*|\s)/.test(stringValue) ||
+    /\s$/.test(stringValue)
+  ) {
     return JSON.stringify(stringValue);
   }
   return stringValue;

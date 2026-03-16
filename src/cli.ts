@@ -408,7 +408,9 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
       "  2. use skills.lock to reproduce exact version+digest when available",
       "  3. reuse the machine-local library on exact match",
       "  4. on cache miss, fall back to pack contents, then recorded local/target sources",
-      "  5. fail closed on digest mismatch instead of silently accepting drift",
+      "  5. recorded public github provider sources can re-materialize unauthenticated when library.yaml has exact ref provenance",
+      "  6. provider recovery rejects symlinks anywhere under the recovered skill root before caching",
+      "  7. fail closed on digest mismatch instead of silently accepting drift",
       "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"

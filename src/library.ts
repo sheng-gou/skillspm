@@ -35,7 +35,15 @@ export async function writeLibrary(layout: ScopeLayout, library: SkillsLibrary):
                   {
                     path: entry.path,
                     cached_at: entry.cached_at,
-                    ...(entry.source ? { source: entry.source } : {})
+                    ...(entry.source
+                      ? {
+                          source: {
+                            kind: entry.source.kind,
+                            value: entry.source.value,
+                            ...(entry.source.provider ? { provider: entry.source.provider } : {})
+                          }
+                        }
+                      : {})
                   }
                 ])
             )
@@ -173,6 +181,23 @@ function validateLibrary(value: unknown): SkillsLibrary {
         }
         if (typeof source.value !== "string") {
           errors.push(`skills.${skillId}.versions.${version}.source.value must be a string`);
+        }
+        if ("provider" in source && source.provider !== undefined) {
+          if (!source.provider || typeof source.provider !== "object" || Array.isArray(source.provider)) {
+            errors.push(`skills.${skillId}.versions.${version}.source.provider must be an object`);
+            continue;
+          }
+
+          const provider = source.provider as { name?: unknown; ref?: unknown; visibility?: unknown };
+          if (typeof provider.name !== "string") {
+            errors.push(`skills.${skillId}.versions.${version}.source.provider.name must be a string`);
+          }
+          if ("ref" in provider && provider.ref !== undefined && typeof provider.ref !== "string") {
+            errors.push(`skills.${skillId}.versions.${version}.source.provider.ref must be a string`);
+          }
+          if ("visibility" in provider && provider.visibility !== undefined && typeof provider.visibility !== "string") {
+            errors.push(`skills.${skillId}.versions.${version}.source.provider.visibility must be a string`);
+          }
         }
       }
     }

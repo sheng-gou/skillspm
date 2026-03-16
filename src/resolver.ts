@@ -1,4 +1,5 @@
 import path from "node:path";
+import { rm } from "node:fs/promises";
 import semver from "semver";
 import { CliError } from "./errors";
 import { loadLibrary, resolveCachedSkillPath, selectCachedVersion } from "./library";
@@ -6,6 +7,7 @@ import { verifyLockedSkillPathIdentity } from "./lockfile";
 import { loadLockfile } from "./lockfile";
 import { loadManifest } from "./manifest";
 import { loadSkillMetadata } from "./skill";
+import { materializeProviderSource } from "./provider";
 import type { LoadedPack } from "./pack";
 import type {
   LockedSkillEntry,
@@ -37,8 +39,6 @@ interface MaterializedSkillResolution {
   digest?: string;
   resolvedFrom?: LockedSkillResolvedFrom;
 }
-
-const REUSABLE_RECORDED_SOURCE_KINDS = new Set(["local", "target"]);
 
 export interface ResolveProjectOptions {
   manifest?: SkillsManifest;
@@ -216,15 +216,29 @@ async function resolveRecordedSourcePath(
   }
 
   if (source.kind === "provider") {
-    return {
-      failureReason: `recorded provider source cannot be re-resolved in this build: ${source.value}`
-    };
-  }
+    const layout = resolveScopeLayout(context.cwd);
+    const materialized = await materializeProviderSource(layout, skillId, version, source);
+    if (!materialized.installPath) {
+      return {
+        failureReason: materialized.failureReason
+      };
+    }
 
-  if (!REUSABLE_RECORDED_SOURCE_KINDS.has(source.kind)) {
-    return {
-      failureReason: `recorded source.kind must be one of local, target, provider; cache-miss reuse only supports local or target, received ${source.kind}: ${source.value}`
-    };
+    try {
+      const lockEntry = context.lockfile?.skills[skillId];
+      const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Recorded provider materialized content");
+      return {
+        installPath: materialized.installPath,
+        digest,
+        resolvedFrom: {
+          type: "provider",
+          ref: source.value
+        }
+      };
+    } catch (error) {
+      await rm(materialized.installPath, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   if (!(await exists(source.value))) {

@@ -47,6 +47,8 @@ NODE
 "${CLI[@]}" help doctor > "$TMPDIR/help-doctor.txt"
 assert_file_contains "$TMPDIR/help-add.txt" "skillspm add <content>"
 assert_file_contains "$TMPDIR/help-install.txt" "skills.lock"
+assert_file_contains "$TMPDIR/help-install.txt" "unauthenticated"
+assert_file_contains "$TMPDIR/help-install.txt" "rejects symlinks"
 assert_file_contains "$TMPDIR/help-install.txt" "digest mismatch"
 assert_file_contains "$TMPDIR/help-pack.txt" "portable supplement"
 assert_file_contains "$TMPDIR/help-freeze.txt" "version, digest, and resolution provenance"
@@ -321,49 +323,372 @@ grep -Fq "failed closed: digest mismatch" "$TMPDIR/digest-fail.err"
 grep -Fq "digest/example@4.5.6" "$TMPDIR/digest-fail.err"
 
 PROVIDER_FAIL_HOME="$TMPDIR/provider-fail-home"
-PROVIDER_FAIL_PROJECT="$TMPDIR/provider-fail-project"
-PROVIDER_SOURCE_ROOT="$TMPDIR/provider-fail-source"
-mkdir -p "$PROVIDER_FAIL_HOME/.skillspm" "$PROVIDER_FAIL_PROJECT" "$PROVIDER_SOURCE_ROOT"
-cat > "$PROVIDER_FAIL_PROJECT/skills.yaml" <<'YAML'
-skills:
-  - id: provider/example
-    version: 1.0.0
-YAML
-cat > "$PROVIDER_FAIL_PROJECT/skills.lock" <<'YAML'
-schema: skills-lock/v2
-skills:
-  provider/example: 1.0.0
-YAML
-cat > "$PROVIDER_SOURCE_ROOT/skill.yaml" <<'YAML'
-id: provider/example
+PROVIDER_FIXTURE_ROOT="$TMPDIR/provider-github"
+PROVIDER_WORKTREE="$TMPDIR/provider-worktree"
+PROVIDER_REFRESH_PROJECT="$TMPDIR/provider-refresh-project"
+mkdir -p "$PROVIDER_FAIL_HOME/.skillspm" "$PROVIDER_FIXTURE_ROOT/example" "$PROVIDER_WORKTREE" "$PROVIDER_REFRESH_PROJECT"
+
+git init --bare "$PROVIDER_FIXTURE_ROOT/example/public-skill.git" > /dev/null
+git init "$PROVIDER_WORKTREE" > /dev/null
+git -C "$PROVIDER_WORKTREE" config user.name "Smoke Test"
+git -C "$PROVIDER_WORKTREE" config user.email "smoke@example.com"
+git -C "$PROVIDER_WORKTREE" branch -m main
+git -C "$PROVIDER_WORKTREE" remote add origin "$PROVIDER_FIXTURE_ROOT/example/public-skill.git"
+
+mkdir -p "$PROVIDER_WORKTREE/skills/provider-demo"
+cat > "$PROVIDER_WORKTREE/skills/provider-demo/skill.yaml" <<'YAML'
+id: github:example/public-skill/skills/provider-demo
 version: 1.0.0
 YAML
-cat > "$PROVIDER_SOURCE_ROOT/SKILL.md" <<'EOF_SKILL'
-# Provider example
+cat > "$PROVIDER_WORKTREE/skills/provider-demo/SKILL.md" <<'EOF_SKILL'
+# Provider demo v1
 EOF_SKILL
-cat > "$PROVIDER_FAIL_HOME/.skillspm/library.yaml" <<YAML
-schema: skills-library/v1
-skills:
-  provider/example:
-    versions:
-      1.0.0:
-        path: $PROVIDER_FAIL_HOME/.skillspm/skills/provider__example@1.0.0
-        cached_at: "2026-03-16T00:00:00.000Z"
-        source:
-          kind: provider
-          value: $PROVIDER_SOURCE_ROOT
+printf 'provider-v1\n' > "$PROVIDER_WORKTREE/skills/provider-demo/materialization.txt"
+(
+  cd "$PROVIDER_WORKTREE"
+  git add .
+  git commit -m "provider v1" > /dev/null
+  git tag v1.0.0
+  git push origin main --tags > /dev/null
+)
+
+cat > "$PROVIDER_WORKTREE/skills/provider-demo/skill.yaml" <<'YAML'
+id: github:example/public-skill/skills/provider-demo
+version: 2.0.0
 YAML
+cat > "$PROVIDER_WORKTREE/skills/provider-demo/SKILL.md" <<'EOF_SKILL'
+# Provider demo v2
+EOF_SKILL
+printf 'provider-v2\n' > "$PROVIDER_WORKTREE/skills/provider-demo/materialization.txt"
+(
+  cd "$PROVIDER_WORKTREE"
+  git add .
+  git commit -m "provider v2" > /dev/null
+  git tag v2.0.0
+  git push origin main --tags > /dev/null
+)
+
+cat > "$PROVIDER_REFRESH_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+node --input-type=module - "$PROVIDER_FAIL_HOME/.skillspm/library.yaml" "$PROVIDER_FAIL_HOME" <<'NODE'
+import fs from 'node:fs';
+import * as YAML from 'yaml';
+
+const [outFile, homeDir] = process.argv.slice(2);
+const doc = {
+  schema: 'skills-library/v1',
+  skills: {
+    'github:example/public-skill/skills/provider-demo': {
+      versions: {
+        '2.0.0': {
+          path: `${homeDir}/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0`,
+          cached_at: '2026-03-16T00:00:00.000Z',
+          source: {
+            kind: 'provider',
+            value: 'github:example/public-skill/skills/provider-demo',
+            provider: {
+              name: 'github',
+              ref: 'refs/tags/v2.0.0',
+              visibility: 'public'
+            }
+          }
+        }
+      }
+    }
+  }
+};
+fs.writeFileSync(outFile, YAML.stringify(doc, { defaultKeyType: 'QUOTE_DOUBLE' }), 'utf8');
+NODE
 
 (
-  cd "$PROVIDER_FAIL_PROJECT"
+  cd "$PROVIDER_REFRESH_PROJECT"
+  HOME="$PROVIDER_FAIL_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+)
+assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return manifest.skills.length === 1 && manifest.skills[0].id === 'github:example/public-skill/skills/provider-demo' && manifest.skills[0].version === '2.0.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/public-skill/skills/provider-demo';" "$PROVIDER_REFRESH_PROJECT/skills.yaml" "$PROVIDER_REFRESH_PROJECT/skills.lock"
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_FAIL_HOME/.skillspm/library.yaml"
+grep -Fxq "provider-v2" "$PROVIDER_FAIL_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0/materialization.txt"
+
+cat > "$PROVIDER_WORKTREE/skills/provider-demo/skill.yaml" <<'YAML'
+id: github:example/public-skill/skills/provider-demo
+version: 2.0.0
+YAML
+cat > "$PROVIDER_WORKTREE/skills/provider-demo/SKILL.md" <<'EOF_SKILL'
+# Provider demo v2 retagged
+EOF_SKILL
+printf 'provider-v2-mismatch\n' > "$PROVIDER_WORKTREE/skills/provider-demo/materialization.txt"
+(
+  cd "$PROVIDER_WORKTREE"
+  git add .
+  git commit -m "provider v2 mismatch" > /dev/null
+  git tag -f v2.0.0 > /dev/null
+  git push origin main --force > /dev/null
+  git push origin refs/tags/v2.0.0 --force > /dev/null
+)
+
+rm -rf "$PROVIDER_FAIL_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0"
+(
+  cd "$PROVIDER_REFRESH_PROJECT"
   set +e
-  HOME="$PROVIDER_FAIL_HOME" "${CLI[@]}" install > "$TMPDIR/provider-fail.out" 2> "$TMPDIR/provider-fail.err"
+  HOME="$PROVIDER_FAIL_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-digest.out" 2> "$TMPDIR/provider-digest.err"
   status=$?
   set -e
   test "$status" -ne 0
 )
-grep -Fq "recorded provider source cannot be re-resolved in this build" "$TMPDIR/provider-fail.err"
-[ ! -d "$PROVIDER_FAIL_HOME/.skillspm/skills/provider__example@1.0.0" ]
+grep -Fq "failed closed: digest mismatch" "$TMPDIR/provider-digest.err"
+[ ! -d "$PROVIDER_FAIL_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+
+PROVIDER_INSUFFICIENT_HOME="$TMPDIR/provider-insufficient-home"
+PROVIDER_INSUFFICIENT_PROJECT="$TMPDIR/provider-insufficient-project"
+mkdir -p "$PROVIDER_INSUFFICIENT_HOME/.skillspm" "$PROVIDER_INSUFFICIENT_PROJECT"
+cat > "$PROVIDER_INSUFFICIENT_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+node --input-type=module - "$PROVIDER_INSUFFICIENT_HOME/.skillspm/library.yaml" <<'NODE'
+import fs from 'node:fs';
+import * as YAML from 'yaml';
+
+const [outFile] = process.argv.slice(2);
+const doc = {
+  schema: 'skills-library/v1',
+  skills: {
+    'github:example/public-skill/skills/provider-demo': {
+      versions: {
+        '2.0.0': {
+          path: '/tmp/missing-provider-cache',
+          cached_at: '2026-03-16T00:00:00.000Z',
+          source: {
+            kind: 'provider',
+            value: 'github:example/public-skill/skills/provider-demo',
+            provider: {
+              name: 'github',
+              visibility: 'public'
+            }
+          }
+        }
+      }
+    }
+  }
+};
+fs.writeFileSync(outFile, YAML.stringify(doc, { defaultKeyType: 'QUOTE_DOUBLE' }), 'utf8');
+NODE
+
+(
+  cd "$PROVIDER_INSUFFICIENT_PROJECT"
+  set +e
+  HOME="$PROVIDER_INSUFFICIENT_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-insufficient.out" 2> "$TMPDIR/provider-insufficient.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "recorded provider source is insufficient for re-materialization" "$TMPDIR/provider-insufficient.err"
+[ ! -d "$PROVIDER_INSUFFICIENT_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+
+PROVIDER_SYMLINK_ABS_HOME="$TMPDIR/provider-symlink-abs-home"
+PROVIDER_SYMLINK_ABS_PROJECT="$TMPDIR/provider-symlink-abs-project"
+PROVIDER_SYMLINK_ABS_WORKTREE="$TMPDIR/provider-symlink-abs-worktree"
+mkdir -p "$PROVIDER_SYMLINK_ABS_HOME/.skillspm" "$PROVIDER_SYMLINK_ABS_PROJECT" "$PROVIDER_SYMLINK_ABS_WORKTREE"
+
+git init --bare "$PROVIDER_FIXTURE_ROOT/example/public-symlink-abs.git" > /dev/null
+git init "$PROVIDER_SYMLINK_ABS_WORKTREE" > /dev/null
+git -C "$PROVIDER_SYMLINK_ABS_WORKTREE" config user.name "Smoke Test"
+git -C "$PROVIDER_SYMLINK_ABS_WORKTREE" config user.email "smoke@example.com"
+git -C "$PROVIDER_SYMLINK_ABS_WORKTREE" branch -m main
+git -C "$PROVIDER_SYMLINK_ABS_WORKTREE" remote add origin "$PROVIDER_FIXTURE_ROOT/example/public-symlink-abs.git"
+
+mkdir -p "$PROVIDER_SYMLINK_ABS_WORKTREE/skills/provider-demo"
+cat > "$PROVIDER_SYMLINK_ABS_WORKTREE/skills/provider-demo/skill.yaml" <<'YAML'
+id: github:example/public-symlink-abs/skills/provider-demo
+version: 1.0.0
+YAML
+cat > "$PROVIDER_SYMLINK_ABS_WORKTREE/skills/provider-demo/SKILL.md" <<'EOF_SKILL'
+# Provider symlink abs
+EOF_SKILL
+ln -s /etc/passwd "$PROVIDER_SYMLINK_ABS_WORKTREE/skills/provider-demo/exfil.txt"
+(
+  cd "$PROVIDER_SYMLINK_ABS_WORKTREE"
+  git add .
+  git commit -m "provider symlink abs" > /dev/null
+  git tag v1.0.0
+  git push origin main --tags > /dev/null
+)
+
+cat > "$PROVIDER_SYMLINK_ABS_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-symlink-abs/skills/provider-demo
+    version: 1.0.0
+YAML
+cat > "$PROVIDER_SYMLINK_ABS_HOME/.skillspm/library.yaml" <<YAML
+schema: skills-library/v1
+skills:
+  "github:example/public-symlink-abs/skills/provider-demo":
+    versions:
+      1.0.0:
+        path: $PROVIDER_SYMLINK_ABS_HOME/.skillspm/skills/github_example__public-symlink-abs__skills__provider-demo@1.0.0
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: github:example/public-symlink-abs/skills/provider-demo
+          provider:
+            name: github
+            ref: refs/tags/v1.0.0
+            visibility: public
+YAML
+
+(
+  cd "$PROVIDER_SYMLINK_ABS_PROJECT"
+  set +e
+  HOME="$PROVIDER_SYMLINK_ABS_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-symlink-abs.out" 2> "$TMPDIR/provider-symlink-abs.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "contains a symbolic link at exfil.txt -> /etc/passwd" "$TMPDIR/provider-symlink-abs.err"
+[ ! -d "$PROVIDER_SYMLINK_ABS_HOME/.skillspm/skills/github_example__public-symlink-abs__skills__provider-demo@1.0.0" ]
+
+PROVIDER_SYMLINK_ESCAPE_HOME="$TMPDIR/provider-symlink-escape-home"
+PROVIDER_SYMLINK_ESCAPE_PROJECT="$TMPDIR/provider-symlink-escape-project"
+PROVIDER_SYMLINK_ESCAPE_WORKTREE="$TMPDIR/provider-symlink-escape-worktree"
+mkdir -p "$PROVIDER_SYMLINK_ESCAPE_HOME/.skillspm" "$PROVIDER_SYMLINK_ESCAPE_PROJECT" "$PROVIDER_SYMLINK_ESCAPE_WORKTREE"
+
+git init --bare "$PROVIDER_FIXTURE_ROOT/example/public-symlink-escape.git" > /dev/null
+git init "$PROVIDER_SYMLINK_ESCAPE_WORKTREE" > /dev/null
+git -C "$PROVIDER_SYMLINK_ESCAPE_WORKTREE" config user.name "Smoke Test"
+git -C "$PROVIDER_SYMLINK_ESCAPE_WORKTREE" config user.email "smoke@example.com"
+git -C "$PROVIDER_SYMLINK_ESCAPE_WORKTREE" branch -m main
+git -C "$PROVIDER_SYMLINK_ESCAPE_WORKTREE" remote add origin "$PROVIDER_FIXTURE_ROOT/example/public-symlink-escape.git"
+
+mkdir -p "$PROVIDER_SYMLINK_ESCAPE_WORKTREE/skills/provider-demo"
+cat > "$PROVIDER_SYMLINK_ESCAPE_WORKTREE/skills/provider-demo/skill.yaml" <<'YAML'
+id: github:example/public-symlink-escape/skills/provider-demo
+version: 1.0.0
+YAML
+cat > "$PROVIDER_SYMLINK_ESCAPE_WORKTREE/skills/provider-demo/SKILL.md" <<'EOF_SKILL'
+# Provider symlink escape
+EOF_SKILL
+printf 'outside\n' > "$PROVIDER_SYMLINK_ESCAPE_WORKTREE/skills/outside.txt"
+ln -s ../outside.txt "$PROVIDER_SYMLINK_ESCAPE_WORKTREE/skills/provider-demo/exfil.txt"
+(
+  cd "$PROVIDER_SYMLINK_ESCAPE_WORKTREE"
+  git add .
+  git commit -m "provider symlink escape" > /dev/null
+  git tag v1.0.0
+  git push origin main --tags > /dev/null
+)
+
+cat > "$PROVIDER_SYMLINK_ESCAPE_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-symlink-escape/skills/provider-demo
+    version: 1.0.0
+YAML
+cat > "$PROVIDER_SYMLINK_ESCAPE_HOME/.skillspm/library.yaml" <<YAML
+schema: skills-library/v1
+skills:
+  "github:example/public-symlink-escape/skills/provider-demo":
+    versions:
+      1.0.0:
+        path: $PROVIDER_SYMLINK_ESCAPE_HOME/.skillspm/skills/github_example__public-symlink-escape__skills__provider-demo@1.0.0
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: github:example/public-symlink-escape/skills/provider-demo
+          provider:
+            name: github
+            ref: refs/tags/v1.0.0
+            visibility: public
+YAML
+
+(
+  cd "$PROVIDER_SYMLINK_ESCAPE_PROJECT"
+  set +e
+  HOME="$PROVIDER_SYMLINK_ESCAPE_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-symlink-escape.out" 2> "$TMPDIR/provider-symlink-escape.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "contains a symbolic link at exfil.txt -> ../outside.txt" "$TMPDIR/provider-symlink-escape.err"
+[ ! -d "$PROVIDER_SYMLINK_ESCAPE_HOME/.skillspm/skills/github_example__public-symlink-escape__skills__provider-demo@1.0.0" ]
+
+PROVIDER_AUTH_HOME="$TMPDIR/provider-auth-home"
+PROVIDER_AUTH_PROJECT="$TMPDIR/provider-auth-project"
+PROVIDER_AUTH_HELPER_LOG="$TMPDIR/provider-auth-helper.log"
+PROVIDER_AUTH_ASKPASS_LOG="$TMPDIR/provider-auth-askpass.log"
+PROVIDER_AUTH_HELPER="$TMPDIR/provider-auth-helper.sh"
+PROVIDER_AUTH_ASKPASS="$TMPDIR/provider-auth-askpass.sh"
+PROVIDER_AUTH_USER="auth-user"
+PROVIDER_AUTH_PASS="auth-pass"
+PROVIDER_AUTH_ROOT="https://$PROVIDER_AUTH_USER@127.0.0.1:1"
+mkdir -p "$PROVIDER_AUTH_HOME/.skillspm" "$PROVIDER_AUTH_PROJECT"
+
+cat > "$PROVIDER_AUTH_HELPER" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\${1:-}" >> "$PROVIDER_AUTH_HELPER_LOG"
+cat > /dev/null
+if [ "\${1:-}" = get ]; then
+  printf 'username=%s\n' "$PROVIDER_AUTH_USER"
+  printf 'password=%s\n' "$PROVIDER_AUTH_PASS"
+fi
+EOF
+chmod +x "$PROVIDER_AUTH_HELPER"
+
+cat > "$PROVIDER_AUTH_ASKPASS" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\${1:-}" >> "$PROVIDER_AUTH_ASKPASS_LOG"
+case "\${1:-}" in
+  Username*) printf '%s\n' "$PROVIDER_AUTH_USER" ;;
+  Password*) printf '%s\n' "$PROVIDER_AUTH_PASS" ;;
+  *) printf '\n' ;;
+esac
+EOF
+chmod +x "$PROVIDER_AUTH_ASKPASS"
+
+cat > "$PROVIDER_AUTH_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/auth-required/skills/provider-demo
+    version: 1.0.0
+YAML
+cat > "$PROVIDER_AUTH_HOME/.skillspm/library.yaml" <<YAML
+schema: skills-library/v1
+skills:
+  "github:example/auth-required/skills/provider-demo":
+    versions:
+      1.0.0:
+        path: $PROVIDER_AUTH_HOME/.skillspm/skills/github_example__auth-required__skills__provider-demo@1.0.0
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: github:example/auth-required/skills/provider-demo
+          provider:
+            name: github
+            ref: refs/tags/v1.0.0
+            visibility: public
+YAML
+
+(
+  cd "$PROVIDER_AUTH_PROJECT"
+  set +e
+  HOME="$PROVIDER_AUTH_HOME" \
+  SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_AUTH_ROOT" \
+  GIT_CONFIG_COUNT=2 \
+  GIT_CONFIG_KEY_0=credential.helper \
+  GIT_CONFIG_VALUE_0="!$PROVIDER_AUTH_HELPER" \
+  GIT_CONFIG_KEY_1=core.askPass \
+  GIT_CONFIG_VALUE_1="$PROVIDER_AUTH_ASKPASS" \
+  GIT_ASKPASS="$PROVIDER_AUTH_ASKPASS" \
+  "${CLI[@]}" install > "$TMPDIR/provider-auth.out" 2> "$TMPDIR/provider-auth.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "public github fetch failed for github:example/auth-required/skills/provider-demo" "$TMPDIR/provider-auth.err"
+grep -Fq "Direct provider recovery only supports unauthenticated access to public GitHub repos" "$TMPDIR/provider-auth.err"
+[ ! -d "$PROVIDER_AUTH_HOME/.skillspm/skills/github_example__auth-required__skills__provider-demo@1.0.0" ]
+[ ! -s "$PROVIDER_AUTH_HELPER_LOG" ]
+[ ! -s "$PROVIDER_AUTH_ASKPASS_LOG" ]
 
 UNKNOWN_KIND_HOME="$TMPDIR/unknown-kind-home"
 UNKNOWN_KIND_PROJECT="$TMPDIR/unknown-kind-project"

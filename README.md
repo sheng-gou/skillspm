@@ -20,9 +20,21 @@ Machine-local state lives in:
 
 The machine-local library is not project truth. It is the local cache/materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
-`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded local/target sources on cache miss. Digest mismatches fail closed instead of silently accepting drift.
+`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded local/target sources on cache miss. Recorded public GitHub provider sources can also re-materialize on cache miss when `~/.skillspm/library.yaml` contains sufficient machine-local provider provenance, but only through unauthenticated access and only when the recovered skill root is symlink-free. Digest mismatches fail closed instead of silently accepting drift.
 
-In this branch, the only reusable recorded sources are local paths and adopted target paths already captured in `~/.skillspm/library.yaml`. Provider-backed ids are still installable from cache or from a pack, but they are not refetched directly because no provider fetch provenance is persisted in project truth.
+Provider recovery is intentionally narrow in this branch: only recorded public `github:` sources with an exact persisted ref are re-fetchable. The recovery path disables credential helpers, askpass hooks, and terminal prompting so private/authenticated GitHub access fails closed honestly. Plain git URLs, vague provider ids, and private/authenticated GitHub flows still require an existing cache entry or a pack.
+
+When a machine-local provider entry is sufficient for recovery, it looks like this in `~/.skillspm/library.yaml`:
+
+```yaml
+source:
+  kind: provider
+  value: github:owner/repo/skills/demo
+  provider:
+    name: github
+    ref: refs/tags/v1.2.3
+    visibility: public
+```
 
 `skillspm pack` is a transport and recovery supplement for private, local, offline, or cross-machine workflows. It does not redefine the source model or replace `skills.yaml`/`skills.lock` as project truth.
 
@@ -51,7 +63,7 @@ skills:
     resolved_from:
       type: local
       ref: ./skills/local-example
-  github:owner/repo/skill:
+  "github:owner/repo/skill":
     version: 1.2.3
     digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
     resolved_from:
@@ -128,7 +140,9 @@ After choosing the input, `install` processes each skill in this order:
 3. reuse the machine-local library on exact content match
 4. on cache miss, fall back to pack contents
 5. on pack miss, fall back to recorded local/target source paths
-6. fail closed on digest mismatch instead of silently accepting drift
+6. if `library.yaml` recorded a public `github:` source with exact ref provenance, re-materialize it into the local cache through unauthenticated public GitHub access only
+7. reject the recovery if any symlink exists anywhere under the recovered provider skill root
+8. fail closed on digest mismatch instead of silently accepting drift
 
 ## Pack format
 

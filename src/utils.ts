@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readFile, readdir, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -42,7 +42,8 @@ export async function writeYamlDocument(targetPath: string, value: unknown): Pro
   const contents = stringifyYaml(value, {
     indent: 2,
     lineWidth: 0,
-    minContentWidth: 0
+    minContentWidth: 0,
+    defaultKeyType: "QUOTE_DOUBLE"
   });
   await writeFile(targetPath, contents, "utf8");
 }
@@ -254,6 +255,10 @@ export async function assertSkillRootMarker(skillRoot: string, label: string): P
   }
 }
 
+export async function assertNoSymlinksInTree(rootDir: string, label: string): Promise<void> {
+  await assertNoSymlinksInTreeRecursive(rootDir, ".", label);
+}
+
 export async function hashDirectoryContents(rootDir: string): Promise<string> {
   const hash = createHash("sha256");
   await appendDirectoryDigest(hash, rootDir, ".", new Set<string>());
@@ -304,6 +309,37 @@ async function appendDirectoryDigest(
 
 function normalizeDigestPath(value: string): string {
   return value.replaceAll("\\", "/");
+}
+
+async function assertNoSymlinksInTreeRecursive(rootDir: string, relativePath: string, label: string): Promise<void> {
+  const absolutePath = relativePath === "." ? rootDir : path.join(rootDir, relativePath);
+  const info = await lstat(absolutePath);
+  if (info.isSymbolicLink()) {
+    const linkTarget = await readlink(absolutePath);
+    throw new CliError(
+      `${label} contains a symbolic link at ${relativePath} -> ${linkTarget}. Provider recovery rejects symlinks before caching.`,
+      2
+    );
+  }
+
+  if (!info.isDirectory()) {
+    return;
+  }
+
+  const entries = await readdir(absolutePath, { withFileTypes: true });
+  for (const entry of entries) {
+    const childRelativePath = relativePath === "." ? entry.name : path.posix.join(relativePath, entry.name);
+    if (entry.isSymbolicLink()) {
+      const linkTarget = await readlink(path.join(absolutePath, entry.name));
+      throw new CliError(
+        `${label} contains a symbolic link at ${childRelativePath} -> ${linkTarget}. Provider recovery rejects symlinks before caching.`,
+        2
+      );
+    }
+    if (entry.isDirectory()) {
+      await assertNoSymlinksInTreeRecursive(rootDir, childRelativePath, label);
+    }
+  }
 }
 
 export function printInfo(message: string): void {
