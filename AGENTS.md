@@ -16,9 +16,9 @@ Machine-local state lives in:
 
 `skills.yaml` is intentionally minimal: only `skills` and optional `targets` belong there.
 
-`skills.lock` keeps exact resolved versions under its `skills` map.
+`skills.lock` keeps exact locked result identity under its `skills` map.
 
-The machine-local library is not project truth. It is the local materialization layer used by `install`, `pack`, `adopt`, and `sync`.
+The machine-local library is not project truth. It is the local cache/materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
 ## Default workflow for agents
 
@@ -60,7 +60,7 @@ For local paths, `add` should materialize into the machine-local library and the
 
 ### `skillspm install [input]`
 
-Resolve the declared environment and cache exact skills locally.
+Read the declared environment from `skills.yaml`, reproduce exact locked results when available, and cache materialized skills locally.
 
 Input precedence is:
 
@@ -72,7 +72,7 @@ If multiple local packs exist, install fails closed.
 
 ### `skillspm pack [out]`
 
-Bundle the current locked environment into a portable `.skillspm.tgz` pack.
+Bundle the current locked environment into a portable `.skillspm.tgz` pack for private/local/offline distribution and recovery.
 
 A pack contains:
 
@@ -85,7 +85,7 @@ A pack contains:
 
 ### `skillspm freeze`
 
-Rewrite `skills.lock` with exact resolved versions.
+Rewrite `skills.lock` with exact locked result identity.
 
 Do not run `freeze` automatically unless the task clearly requires updating the lockfile.
 
@@ -133,7 +133,7 @@ Do not put local path or source provenance into this file.
 
 ### `skills.lock`
 
-Stores the exact resolved versions for the environment.
+Stores the exact locked result identity for the environment.
 
 Agents should not hand-edit `skills.lock` unless explicitly asked.
 

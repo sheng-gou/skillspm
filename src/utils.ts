@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { access, cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -251,6 +252,58 @@ export async function assertSkillRootMarker(skillRoot: string, label: string): P
       2
     );
   }
+}
+
+export async function hashDirectoryContents(rootDir: string): Promise<string> {
+  const hash = createHash("sha256");
+  await appendDirectoryDigest(hash, rootDir, ".", new Set<string>());
+  return `sha256:${hash.digest("hex")}`;
+}
+
+async function appendDirectoryDigest(
+  hash: ReturnType<typeof createHash>,
+  rootDir: string,
+  relativeDir: string,
+  activeRealPaths: Set<string>
+): Promise<void> {
+  const currentDir = relativeDir === "." ? rootDir : path.join(rootDir, relativeDir);
+  const realDir = await realpath(currentDir);
+  if (activeRealPaths.has(realDir)) {
+    throw new CliError(`Unable to hash ${rootDir}: recursive directory cycle detected at ${currentDir}`, 2);
+  }
+
+  activeRealPaths.add(realDir);
+  hash.update(`dir ${normalizeDigestPath(relativeDir)}\n`);
+
+  const entries = (await readdir(currentDir, { withFileTypes: true }))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+
+  for (const entryName of entries) {
+    const relativeEntry = relativeDir === "." ? entryName : path.posix.join(relativeDir, entryName);
+    const absoluteEntry = path.join(currentDir, entryName);
+    const entryInfo = await stat(absoluteEntry);
+
+    if (entryInfo.isDirectory()) {
+      await appendDirectoryDigest(hash, rootDir, relativeEntry, activeRealPaths);
+      continue;
+    }
+
+    if (entryInfo.isFile()) {
+      hash.update(`file ${normalizeDigestPath(relativeEntry)} ${entryInfo.size}\n`);
+      hash.update(await readFile(absoluteEntry));
+      hash.update("\n");
+      continue;
+    }
+
+    hash.update(`other ${normalizeDigestPath(relativeEntry)}\n`);
+  }
+
+  activeRealPaths.delete(realDir);
+}
+
+function normalizeDigestPath(value: string): string {
+  return value.replaceAll("\\", "/");
 }
 
 export function printInfo(message: string): void {

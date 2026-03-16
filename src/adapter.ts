@@ -3,6 +3,7 @@ import path from "node:path";
 import { rm, symlink } from "node:fs/promises";
 import { loadLibrary, resolveCachedSkillPath } from "./library";
 import { loadLockfile } from "./lockfile";
+import { verifyLockedSkillPathIdentity } from "./lockfile";
 import { CliError } from "./errors";
 import type { ScopeLayout } from "./scope";
 import type { InstallMode, ManifestTarget, SkillsManifest, TargetType } from "./types";
@@ -69,11 +70,13 @@ export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest,
   const mode = resolveInstallMode(options.mode);
   const syncEntries: SyncSkillEntry[] = [];
 
-  for (const [skillId, version] of entries) {
+  for (const [skillId, entry] of entries) {
+    const version = entry.version;
     const sourcePath = await resolveCachedSkillPath(layout, library, skillId, version);
     if (!sourcePath) {
       throw new CliError(`Cached files for ${skillId}@${version} are missing from ${layout.librarySkillsDir}.`, 4);
     }
+    await verifyLockedSkillPathIdentity(skillId, entry, sourcePath, "Cached materialized content");
 
     syncEntries.push({
       skillId,

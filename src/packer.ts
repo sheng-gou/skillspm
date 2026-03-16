@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { loadLibrary, resolveCachedSkillPath } from "./library";
 import { loadLockfile } from "./lockfile";
+import { verifyLockedSkillPathIdentity } from "./lockfile";
 import { loadManifest } from "./manifest";
 import { PACK_INTERNAL_MANIFEST_FILE, PACK_SKILLS_DIR } from "./pack";
 import type { ScopeLayout } from "./scope";
@@ -28,7 +29,7 @@ export async function packProject(layout: ScopeLayout, outFile: string): Promise
   const packedManifest = {
     skills: manifest.skills.map((skill) => ({
       id: skill.id,
-      ...(lockfile.skills[skill.id] ? { version: lockfile.skills[skill.id] } : skill.version ? { version: skill.version } : {})
+      ...(lockfile.skills[skill.id] ? { version: lockfile.skills[skill.id].version } : skill.version ? { version: skill.version } : {})
     })),
     ...(manifest.targets ? { targets: manifest.targets } : {})
   };
@@ -48,11 +49,13 @@ export async function packProject(layout: ScopeLayout, outFile: string): Promise
       skills: {}
     };
 
-    for (const [skillId, version] of Object.entries(lockfile.skills).sort(([left], [right]) => left.localeCompare(right))) {
+    for (const [skillId, entry] of Object.entries(lockfile.skills).sort(([left], [right]) => left.localeCompare(right))) {
+      const version = entry.version;
       const sourcePath = await resolveCachedSkillPath(layout, library, skillId, version);
       if (!sourcePath) {
         throw new CliError(`Cached files for ${skillId}@${version} are missing from ${layout.librarySkillsDir}.`, 4);
       }
+      await verifyLockedSkillPathIdentity(skillId, entry, sourcePath, "Cached materialized content");
 
       const entryName = path.basename(sourcePath);
       await copyDir(sourcePath, path.join(tempRoot, PACK_SKILLS_DIR, entryName), { dereference: true });

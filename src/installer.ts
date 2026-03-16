@@ -1,5 +1,5 @@
 import { cacheSkill, loadLibrary } from "./library";
-import { writeLockfile } from "./lockfile";
+import { buildLockfileFromNodes, writeLockfile } from "./lockfile";
 import type { LoadedPack } from "./pack";
 import { resolveProject } from "./resolver";
 import type { ScopeLayout } from "./scope";
@@ -34,14 +34,7 @@ export async function installProject(layout: ScopeLayout, options: InstallProjec
     printSuccess(`Cached ${node.id}@${node.version}`);
   }
 
-  const lockfile: SkillsLock = {
-    schema: "skills-lock/v2",
-    skills: Object.fromEntries(
-      [...resolution.nodes.values()]
-        .sort((left, right) => left.id.localeCompare(right.id))
-        .map((node) => [node.id, node.version])
-    )
-  };
+  const lockfile: SkillsLock = buildLockfileFromNodes(resolution.nodes.values());
 
   if (options.writeLockfile !== false) {
     await writeLockfile(layout.rootDir, lockfile);

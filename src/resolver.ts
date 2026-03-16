@@ -2,12 +2,22 @@ import path from "node:path";
 import semver from "semver";
 import { CliError } from "./errors";
 import { loadLibrary, resolveCachedSkillPath, selectCachedVersion } from "./library";
+import { verifyLockedSkillPathIdentity } from "./lockfile";
 import { loadLockfile } from "./lockfile";
 import { loadManifest } from "./manifest";
 import { loadSkillMetadata } from "./skill";
 import type { LoadedPack } from "./pack";
-import type { ManifestSkill, ResolutionResult, ResolvedSkillNode, SkillDependency, SkillsLock, SkillsManifest } from "./types";
-import { assertSkillRootMarker, exists, isDirectory } from "./utils";
+import type {
+  LockedSkillEntry,
+  LockedSkillResolvedFrom,
+  ManifestSkill,
+  ResolutionResult,
+  ResolvedSkillNode,
+  SkillDependency,
+  SkillsLock,
+  SkillsManifest
+} from "./types";
+import { assertSkillRootMarker, exists, hashDirectoryContents, isDirectory } from "./utils";
 import { resolveScopeLayout } from "./scope";
 
 interface ResolveContext {
@@ -24,6 +34,8 @@ interface ResolveContext {
 interface MaterializedSkillResolution {
   installPath?: string;
   failureReason?: string;
+  digest?: string;
+  resolvedFrom?: LockedSkillResolvedFrom;
 }
 
 const REUSABLE_RECORDED_SOURCE_KINDS = new Set(["local", "target"]);
@@ -91,6 +103,8 @@ async function resolveManifestSkill(
   const node: ResolvedSkillNode = {
     id: resolvedId,
     version: resolvedVersion,
+    digest: materialized.digest!,
+    resolvedFrom: materialized.resolvedFrom!,
     dependencies: metadata?.dependencies ?? [],
     installPath,
     metadata,
@@ -122,7 +136,7 @@ function selectSkillVersion(context: ResolveContext, manifestSkill: ManifestSkil
     return requested;
   }
 
-  const lockedVersion = context.lockfile?.skills[manifestSkill.id];
+  const lockedVersion = context.lockfile?.skills[manifestSkill.id]?.version;
   if (lockedVersion && satisfiesRequestedVersion(lockedVersion, requested)) {
     return lockedVersion;
   }
@@ -150,9 +164,15 @@ async function resolveMaterializedSkillPath(
   version: string
 ): Promise<MaterializedSkillResolution> {
   const layout = resolveScopeLayout(context.cwd);
+  const lockEntry = context.lockfile?.skills[skillId];
   const cachedPath = await resolveCachedSkillPath(layout, context.library, skillId, version);
   if (cachedPath) {
-    return { installPath: cachedPath };
+    const digest = await verifyLockedPath(skillId, version, lockEntry, cachedPath, "Cached materialized content");
+    return {
+      installPath: cachedPath,
+      digest,
+      resolvedFrom: getCachedResolvedFrom(context, skillId, version)
+    };
   }
 
   const sourceFailures: string[] = [];
@@ -160,7 +180,15 @@ async function resolveMaterializedSkillPath(
   if (packPath && packPath.version === version) {
     const candidate = path.join(context.pack.skillsDir, packPath.entry);
     if (await exists(candidate)) {
-      return { installPath: candidate };
+      const digest = await verifyLockedPath(skillId, version, lockEntry, candidate, "Pack materialized content");
+      return {
+        installPath: candidate,
+        digest,
+        resolvedFrom: {
+          type: "pack",
+          ref: packPath.entry
+        }
+      };
     }
     sourceFailures.push(`pack entry was declared but missing at ${candidate}`);
   }
@@ -219,7 +247,16 @@ async function resolveRecordedSourcePath(
     };
   }
 
-  return { installPath: source.value };
+  const lockEntry = context.lockfile?.skills[skillId];
+  const digest = await verifyLockedPath(skillId, version, lockEntry, source.value, "Recorded source materialized content");
+  return {
+    installPath: source.value,
+    digest,
+    resolvedFrom: {
+      type: source.kind,
+      ref: source.value
+    }
+  };
 }
 
 async function registerNode(
@@ -257,6 +294,36 @@ function satisfiesRequestedVersion(resolvedVersion: string, requestedRange: stri
     return requestedRange === resolvedVersion;
   }
   return semver.satisfies(resolvedVersion, requestedRange);
+}
+
+function getCachedResolvedFrom(context: ResolveContext, skillId: string, version: string): LockedSkillResolvedFrom {
+  const source = context.library.skills[skillId]?.versions[version]?.source;
+  if (source) {
+    return {
+      type: source.kind,
+      ref: source.value
+    };
+  }
+  return {
+    type: "cache",
+    ref: `${skillId}@${version}`
+  };
+}
+
+async function verifyLockedPath(
+  skillId: string,
+  version: string,
+  lockEntry: LockedSkillEntry | undefined,
+  targetPath: string,
+  label: string
+): Promise<string> {
+  if (!lockEntry) {
+    return hashDirectoryContents(targetPath);
+  }
+  if (lockEntry.version !== version) {
+    return hashDirectoryContents(targetPath);
+  }
+  return verifyLockedSkillPathIdentity(skillId, lockEntry, targetPath, label);
 }
 
 function ensureDependencyRange(

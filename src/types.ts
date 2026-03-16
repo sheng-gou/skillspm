@@ -45,9 +45,20 @@ export interface SkillMetadata {
   };
 }
 
+export interface LockedSkillResolvedFrom {
+  type: "cache" | "pack" | "local" | "target" | "provider";
+  ref: string;
+}
+
+export interface LockedSkillEntry {
+  version: string;
+  digest?: string;
+  resolved_from?: LockedSkillResolvedFrom;
+}
+
 export interface SkillsLock {
-  schema: "skills-lock/v2";
-  skills: Record<string, string>;
+  schema: "skills-lock/v2" | "skills-lock/v3";
+  skills: Record<string, LockedSkillEntry>;
 }
 
 export interface LibrarySkillSource {
@@ -82,6 +93,8 @@ export interface SkillsPackManifest {
 export interface ResolvedSkillNode {
   id: string;
   version: string;
+  digest: string;
+  resolvedFrom: LockedSkillResolvedFrom;
   dependencies: SkillDependency[];
   installPath: string;
   metadata?: SkillMetadata;

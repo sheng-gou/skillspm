@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { resolveDefaultTargetPath } from "./adapter";
 import { loadLibrary, resolveCachedSkillPath } from "./library";
 import { loadLockfile } from "./lockfile";
+import { verifyLockedSkillPathIdentity } from "./lockfile";
 import { loadManifest, loadManifestFromPath } from "./manifest";
 import { resolveScopeLayout, type ScopeLayout } from "./scope";
 import { loadSkillMetadata, resolveSkillMarkdownPath } from "./skill";
@@ -127,7 +128,8 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
       message: `${lockedSkillCount} skills locked`
     });
 
-    for (const [skillId, version] of Object.entries(lockfile.skills)) {
+    for (const [skillId, entry] of Object.entries(lockfile.skills)) {
+      const version = entry.version;
       const cachedPath = await resolveCachedSkillPath(layout, library, skillId, version);
       if (!cachedPath) {
         packReady = false;
@@ -137,6 +139,20 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
           message: `cached directory missing for ${skillId}@${version}`,
           skillId,
           path: path.join(layout.librarySkillsDir, `${skillId}@${version}`)
+        });
+        continue;
+      }
+
+      try {
+        await verifyLockedSkillPathIdentity(skillId, entry, cachedPath, "Cached materialized content");
+      } catch (error) {
+        packReady = false;
+        errorCount += 1;
+        findings.push({
+          level: "error",
+          message: error instanceof Error ? error.message : String(error),
+          skillId,
+          path: cachedPath
         });
         continue;
       }

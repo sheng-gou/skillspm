@@ -39,10 +39,17 @@ NODE
 
 # Help surface
 "${CLI[@]}" help add > "$TMPDIR/help-add.txt"
+"${CLI[@]}" help install > "$TMPDIR/help-install.txt"
+"${CLI[@]}" help pack > "$TMPDIR/help-pack.txt"
+"${CLI[@]}" help freeze > "$TMPDIR/help-freeze.txt"
 "${CLI[@]}" help adopt > "$TMPDIR/help-adopt.txt"
 "${CLI[@]}" help sync > "$TMPDIR/help-sync.txt"
 "${CLI[@]}" help doctor > "$TMPDIR/help-doctor.txt"
 assert_file_contains "$TMPDIR/help-add.txt" "skillspm add <content>"
+assert_file_contains "$TMPDIR/help-install.txt" "skills.lock"
+assert_file_contains "$TMPDIR/help-install.txt" "digest mismatch"
+assert_file_contains "$TMPDIR/help-pack.txt" "portable supplement"
+assert_file_contains "$TMPDIR/help-freeze.txt" "version, digest, and resolution provenance"
 assert_file_contains "$TMPDIR/help-add.txt" "--provider <provider>"
 assert_file_contains "$TMPDIR/help-add.txt" "Choose the provider"
 assert_file_contains "$TMPDIR/help-adopt.txt" "skillspm adopt openclaw"
@@ -91,8 +98,11 @@ rm -rf "$HOME/.skillspm/skills/local__example@1.2.3"
 (
   cd "$LOCAL_INSTALL_PROJECT"
   "${CLI[@]}" install
+  "${CLI[@]}" freeze
 )
 assert_node "const [library] = docs; const entry = library.skills['local/example'].versions['1.2.3']; return entry.path.endsWith('/local__example@1.2.3') && entry.source.kind === 'local' && entry.source.value.endsWith('/local-skill');" "$HOME/.skillspm/library.yaml"
+[ -f "$LOCAL_INSTALL_PROJECT/skills.lock" ]
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['local/example']; return lockfile.schema === 'skills-lock/v3' && entry.version === '1.2.3' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'local' && entry.resolved_from.ref.endsWith('/local-skill');" "$LOCAL_INSTALL_PROJECT/skills.lock"
 [ -d "$HOME/.skillspm/skills/local__example@1.2.3" ]
 
 CACHE_PRIORITY_PROJECT="$TMPDIR/cache-priority-project"
@@ -170,10 +180,13 @@ mkdir -p "$ADOPT_PROJECT"
   cd "$ADOPT_PROJECT"
   "${CLI[@]}" adopt openclaw,codex
   "${CLI[@]}" install
+  "${CLI[@]}" freeze
   "${CLI[@]}" sync openclaw,codex
 )
 
 assert_node "const [manifest] = docs; const keys = Object.keys(manifest).sort().join(','); if (keys !== 'skills') return false; if (manifest.skills.some((entry) => 'path' in entry)) return false; const ids = manifest.skills.map((entry) => entry.id + '@' + entry.version); return ids.includes('adopted/codex@3.1.0') && ids.includes('adopted/openclaw@2.0.0');" "$ADOPT_PROJECT/skills.yaml"
+[ -f "$ADOPT_PROJECT/skills.lock" ]
+assert_node "const [lockfile] = docs; const openclaw = lockfile.skills['adopted/openclaw']; const codex = lockfile.skills['adopted/codex']; return lockfile.schema === 'skills-lock/v3' && openclaw.version === '2.0.0' && codex.version === '3.1.0' && /^sha256:[0-9a-f]{64}$/.test(openclaw.digest) && /^sha256:[0-9a-f]{64}$/.test(codex.digest) && openclaw.resolved_from.type === 'target' && codex.resolved_from.type === 'target';" "$ADOPT_PROJECT/skills.lock"
 [ -f "$HOME/.skillspm/library.yaml" ]
 assert_node "const [library] = docs; const openclaw = library.skills['adopted/openclaw'].versions['2.0.0']; const codex = library.skills['adopted/codex'].versions['3.1.0']; return openclaw.source.kind === 'target' && openclaw.source.value.endsWith('/adopt-openclaw') && codex.source.kind === 'target' && codex.source.value.endsWith('/adopt-codex');" "$HOME/.skillspm/library.yaml"
 [ -d "$HOME/.openclaw/skills/adopted__openclaw@2.0.0" ]
@@ -217,6 +230,95 @@ YAML
 grep -Fq "cache lookup failed:" "$TMPDIR/fail-install.err"
 grep -Fq "source resolution failed:" "$TMPDIR/fail-install.err"
 grep -Fq "no reusable source provenance recorded" "$TMPDIR/fail-install.err"
+
+STALE_LOCK_INSTALL_PROJECT="$TMPDIR/stale-lock-install-project"
+mkdir -p "$STALE_LOCK_INSTALL_PROJECT/skill-v1" "$STALE_LOCK_INSTALL_PROJECT/skill-v2"
+cat > "$STALE_LOCK_INSTALL_PROJECT/skill-v1/skill.yaml" <<'YAML'
+id: stale/install
+version: 1.0.0
+YAML
+cat > "$STALE_LOCK_INSTALL_PROJECT/skill-v1/SKILL.md" <<'EOF_SKILL'
+# Stale install v1
+EOF_SKILL
+printf 'v1\n' > "$STALE_LOCK_INSTALL_PROJECT/skill-v1/materialization.txt"
+cat > "$STALE_LOCK_INSTALL_PROJECT/skill-v2/skill.yaml" <<'YAML'
+id: stale/install
+version: 2.0.0
+YAML
+cat > "$STALE_LOCK_INSTALL_PROJECT/skill-v2/SKILL.md" <<'EOF_SKILL'
+# Stale install v2
+EOF_SKILL
+printf 'v2\n' > "$STALE_LOCK_INSTALL_PROJECT/skill-v2/materialization.txt"
+
+(
+  cd "$STALE_LOCK_INSTALL_PROJECT"
+  "${CLI[@]}" add ./skill-v1
+  "${CLI[@]}" install
+  "${CLI[@]}" add ./skill-v2
+  "${CLI[@]}" install
+)
+
+assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['stale/install']; return manifest.skills.length === 1 && manifest.skills[0].id === 'stale/install' && manifest.skills[0].version === '2.0.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'local' && entry.resolved_from.ref.endsWith('/skill-v2');" "$STALE_LOCK_INSTALL_PROJECT/skills.yaml" "$STALE_LOCK_INSTALL_PROJECT/skills.lock"
+grep -Fxq "v2" "$HOME/.skillspm/skills/stale__install@2.0.0/materialization.txt"
+
+STALE_LOCK_FREEZE_PROJECT="$TMPDIR/stale-lock-freeze-project"
+mkdir -p "$STALE_LOCK_FREEZE_PROJECT/skill-v1" "$STALE_LOCK_FREEZE_PROJECT/skill-v2"
+cat > "$STALE_LOCK_FREEZE_PROJECT/skill-v1/skill.yaml" <<'YAML'
+id: stale/freeze
+version: 1.0.0
+YAML
+cat > "$STALE_LOCK_FREEZE_PROJECT/skill-v1/SKILL.md" <<'EOF_SKILL'
+# Stale freeze v1
+EOF_SKILL
+printf 'v1\n' > "$STALE_LOCK_FREEZE_PROJECT/skill-v1/materialization.txt"
+cat > "$STALE_LOCK_FREEZE_PROJECT/skill-v2/skill.yaml" <<'YAML'
+id: stale/freeze
+version: 2.0.0
+YAML
+cat > "$STALE_LOCK_FREEZE_PROJECT/skill-v2/SKILL.md" <<'EOF_SKILL'
+# Stale freeze v2
+EOF_SKILL
+printf 'v2\n' > "$STALE_LOCK_FREEZE_PROJECT/skill-v2/materialization.txt"
+
+(
+  cd "$STALE_LOCK_FREEZE_PROJECT"
+  "${CLI[@]}" add ./skill-v1
+  "${CLI[@]}" install
+  "${CLI[@]}" add ./skill-v2
+  "${CLI[@]}" freeze
+)
+
+assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['stale/freeze']; return manifest.skills.length === 1 && manifest.skills[0].id === 'stale/freeze' && manifest.skills[0].version === '2.0.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'local' && entry.resolved_from.ref.endsWith('/skill-v2');" "$STALE_LOCK_FREEZE_PROJECT/skills.yaml" "$STALE_LOCK_FREEZE_PROJECT/skills.lock"
+
+DIGEST_FAIL_PROJECT="$TMPDIR/digest-fail-project"
+mkdir -p "$DIGEST_FAIL_PROJECT/digest-skill"
+cat > "$DIGEST_FAIL_PROJECT/digest-skill/skill.yaml" <<'YAML'
+id: digest/example
+version: 4.5.6
+YAML
+cat > "$DIGEST_FAIL_PROJECT/digest-skill/SKILL.md" <<'EOF_SKILL'
+# Digest example
+EOF_SKILL
+printf 'original\n' > "$DIGEST_FAIL_PROJECT/digest-skill/materialization.txt"
+
+(
+  cd "$DIGEST_FAIL_PROJECT"
+  "${CLI[@]}" add ./digest-skill
+  "${CLI[@]}" install
+)
+
+printf 'tampered\n' > "$HOME/.skillspm/skills/digest__example@4.5.6/materialization.txt"
+
+(
+  cd "$DIGEST_FAIL_PROJECT"
+  set +e
+  "${CLI[@]}" install > "$TMPDIR/digest-fail.out" 2> "$TMPDIR/digest-fail.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "failed closed: digest mismatch" "$TMPDIR/digest-fail.err"
+grep -Fq "digest/example@4.5.6" "$TMPDIR/digest-fail.err"
 
 PROVIDER_FAIL_HOME="$TMPDIR/provider-fail-home"
 PROVIDER_FAIL_PROJECT="$TMPDIR/provider-fail-project"

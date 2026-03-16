@@ -1,6 +1,6 @@
 # skillspm
 
-`skillspm` manages declarative Skills environments with a minimal project manifest and a machine-local library cache.
+`skillspm` manages declarative Skills environments with a minimal project manifest, an exact lockfile, and a machine-local materialization cache.
 
 ## 0.3.0 model
 
@@ -14,15 +14,17 @@ Machine-local state lives in:
 - `~/.skillspm/library.yaml`
 - `~/.skillspm/skills/`
 
-`skills.yaml` is intentionally minimal: it keeps only `skills` and optional `targets`.
+`skills.yaml` is intentionally minimal: it keeps only the desired `skills` and optional `targets`.
 
-`skills.lock` records the exact resolved versions under its `skills` map.
+`skills.lock` records the exact locked result identity for each skill: exact version, content digest, and resolution provenance.
 
-The machine-local library is not project truth. It is the local materialization layer used by `install`, `pack`, `adopt`, and `sync`.
+The machine-local library is not project truth. It is the local cache/materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
-`skillspm install` is source-aware. It reuses the machine-local cache on hit, and on cache miss it falls back to pack contents, then supported recorded sources when available. The cache is not a required prerequisite for install.
+`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded local/target sources on cache miss. Digest mismatches fail closed instead of silently accepting drift.
 
 In this branch, the only reusable recorded sources are local paths and adopted target paths already captured in `~/.skillspm/library.yaml`. Provider-backed ids are still installable from cache or from a pack, but they are not refetched directly because no provider fetch provenance is persisted in project truth.
+
+`skillspm pack` is a transport and recovery supplement for private, local, offline, or cross-machine workflows. It does not redefine the source model or replace `skills.yaml`/`skills.lock` as project truth.
 
 ## Manifest
 
@@ -41,10 +43,20 @@ targets:
 ## Lockfile
 
 ```yaml
-schema: skills-lock/v2
+schema: skills-lock/v3
 skills:
-  local/example: 0.1.0
-  github:owner/repo/skill: 1.2.3
+  local/example:
+    version: 0.1.0
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    resolved_from:
+      type: local
+      ref: ./skills/local-example
+  github:owner/repo/skill:
+    version: 1.2.3
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+    resolved_from:
+      type: pack
+      ref: github__owner__repo__skill@1.2.3
 ```
 
 ## Public commands
@@ -109,12 +121,14 @@ skillspm sync openclaw,codex
 
 If multiple local packs exist, install fails closed.
 
-After choosing the input, `install` materializes each locked skill in this order:
+After choosing the input, `install` processes each skill in this order:
 
-1. reuse the machine-local cache on hit
-2. on cache miss, fall back to pack contents
-3. on pack miss, fall back to recorded local/target source paths
-4. fail only after cache lookup, pack lookup, and source resolution fail
+1. read the desired skill ids/ranges from `skills.yaml`
+2. use `skills.lock` to reproduce exact version+digest when present
+3. reuse the machine-local library on exact content match
+4. on cache miss, fall back to pack contents
+5. on pack miss, fall back to recorded local/target source paths
+6. fail closed on digest mismatch instead of silently accepting drift
 
 ## Pack format
 
@@ -126,6 +140,8 @@ A `.skillspm.tgz` pack contains:
 - `skills/` with exact cached skill payloads
 
 `manifest.yaml` is internal pack metadata, not user-facing environment truth.
+
+Packs are for transport, private/local/offline distribution, and recovery. They supplement the normal install flow; they are not a new persistent source type.
 
 ## Doctor scope
 

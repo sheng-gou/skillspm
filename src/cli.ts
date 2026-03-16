@@ -7,7 +7,7 @@ import { CliError } from "./errors";
 import { importSkills } from "./importer";
 import { installProject } from "./installer";
 import { cacheSkill, loadLibrary } from "./library";
-import { loadLockfile, writeLockfile } from "./lockfile";
+import { buildLockfileFromNodes, loadLockfile, writeLockfile } from "./lockfile";
 import { createDefaultManifest, isSupportedVersionRange, loadManifest, loadManifestFromPath, saveManifest } from "./manifest";
 import { extractPack } from "./pack";
 import { packProject } from "./packer";
@@ -91,7 +91,7 @@ export async function runCli(argv: string[]): Promise<number> {
     withScopeOption(
       program
         .command("install")
-        .description("Resolve a skills environment with cache reuse and source-aware fallback")
+        .description("Read skills.yaml, reproduce locked identities when available, and reuse local materializations safely")
         .argument("[input]", "Explicit path to skills.yaml or *.skillspm.tgz")
     ).action(async (inputOrOptions: string | { global?: boolean } | undefined, options?: { global?: boolean }) => {
       const input = typeof inputOrOptions === "string" ? inputOrOptions : undefined;
@@ -103,7 +103,7 @@ export async function runCli(argv: string[]): Promise<number> {
     withScopeOption(
       program
         .command("pack")
-        .description("Bundle the current locked environment into a portable pack")
+        .description("Bundle the current locked environment into a portable supplement for offline or cross-machine recovery")
         .argument("[out]", "Output .skillspm.tgz file")
     ).action(async (outOrOptions: string | { global?: boolean } | undefined, options?: { global?: boolean }) => {
       const out = typeof outOrOptions === "string" ? outOrOptions : undefined;
@@ -116,18 +116,11 @@ export async function runCli(argv: string[]): Promise<number> {
     withScopeOption(
       program
         .command("freeze")
-        .description("Rewrite skills.lock with exact resolved versions")
+        .description("Rewrite skills.lock with exact locked result identity from the current resolution")
     ).action(async (options: { global?: boolean }) => {
       const layout = resolveScopeLayout(process.cwd(), options.global);
       const resolution = await resolveProject(layout.rootDir);
-      const lockfile = {
-        schema: "skills-lock/v2" as const,
-        skills: Object.fromEntries(
-          [...resolution.nodes.values()]
-            .sort((left, right) => left.id.localeCompare(right.id))
-            .map((node) => [node.id, node.version])
-        )
-      };
+      const lockfile = buildLockfileFromNodes(resolution.nodes.values());
       await writeLockfile(layout.rootDir, lockfile);
       printSuccess(`Updated skills.lock (${Object.keys(lockfile.skills).length} skill${Object.keys(lockfile.skills).length === 1 ? "" : "s"})`);
     });
@@ -165,7 +158,7 @@ export async function runCli(argv: string[]): Promise<number> {
     withScopeOption(
       program
         .command("sync")
-        .description("Sync locked skills from the local library cache to targets")
+        .description("Sync locked skills from the machine-local library to targets")
         .argument("[target]", "Target type or comma-separated target types")
         .option("--mode <mode>", "Sync mode: copy or symlink")
     ).action(async (targetOrOptions: string | { mode?: string; global?: boolean } | undefined, options?: { mode?: string; global?: boolean }) => {
@@ -403,18 +396,19 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     return [
       "Usage: skillspm install [input] [options]",
       "",
-      "Resolve a skills environment with cache reuse and source-aware fallback",
+      "Read skills.yaml, consult skills.lock when present, and reuse exact local materializations safely",
       "",
       "Install input precedence:",
       "  1. explicit path to skills.yaml or *.skillspm.tgz",
       "  2. current scope skills.yaml",
       "  3. exactly one current-directory *.skillspm.tgz",
       "",
-      "Materialization order:",
-      "  1. reuse the machine-local cache on hit",
-      "  2. on cache miss, fall back to pack contents",
-      "  3. on pack miss, fall back to recorded local/target source paths",
-      "  4. fail only after cache lookup, pack lookup, and source resolution fail",
+      "Resolution flow:",
+      "  1. read desired skills from skills.yaml",
+      "  2. use skills.lock to reproduce exact version+digest when available",
+      "  3. reuse the machine-local library on exact match",
+      "  4. on cache miss, fall back to pack contents, then recorded local/target sources",
+      "  5. fail closed on digest mismatch instead of silently accepting drift",
       "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"
@@ -424,7 +418,7 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     return [
       "Usage: skillspm pack [out] [options]",
       "",
-      "Bundle the current locked environment into a portable pack",
+      "Bundle the current locked environment into a portable supplement for private, local, offline, or recovery workflows",
       "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"
@@ -434,7 +428,7 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     return [
       "Usage: skillspm freeze [options]",
       "",
-      "Rewrite skills.lock with exact resolved versions",
+      "Rewrite skills.lock with exact version, digest, and resolution provenance from the current result",
       "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"
@@ -459,7 +453,7 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     return [
       "Usage: skillspm sync [target] [options]",
       "",
-      "Sync locked skills from the local library cache to targets",
+      "Sync locked skills from the machine-local library to targets",
       "",
       "Examples:",
       "  skillspm sync openclaw",
@@ -499,11 +493,11 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     "",
     "Public commands:",
     "  add               Unified add <content> entrypoint for local paths, GitHub URLs, and provider-backed skill ids",
-    "  install           Resolve a skills environment with cache reuse and source-aware fallback",
-    "  pack              Bundle the current locked environment into a portable pack",
-    "  freeze            Rewrite skills.lock with exact resolved versions",
+    "  install           Read skills.yaml, reproduce locked identities when available, and reuse local materializations safely",
+    "  pack              Bundle the current locked environment into a portable recovery supplement",
+    "  freeze            Rewrite skills.lock with exact locked result identity",
     "  adopt             Discover existing skills and merge them into skills.yaml from [source]",
-    "  sync              Sync locked skills from the local library cache to [target]",
+    "  sync              Sync locked skills from the machine-local library to [target]",
     "  doctor            Check manifest, lockfile, library, pack, targets, and project/global conflicts",
     "  help              Show top-level or command-specific help",
     "",

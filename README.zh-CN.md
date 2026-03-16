@@ -1,6 +1,6 @@
 # skillspm
 
-`skillspm` 用最小化项目清单 + 机器本地 library cache 来管理声明式 Skills 环境。
+`skillspm` 用最小化项目清单、精确 lockfile 和机器本地物化缓存来管理声明式 Skills 环境。
 
 ## 0.3.0 模型
 
@@ -14,15 +14,17 @@
 - `~/.skillspm/library.yaml`
 - `~/.skillspm/skills/`
 
-`skills.yaml` 被刻意收缩为最小公开契约：只保留 `skills` 和可选的 `targets`。
+`skills.yaml` 被刻意收缩为最小公开契约：只保留期望的 `skills` 和可选的 `targets`。
 
-`skills.lock` 在 `skills` 映射下记录精确解析后的版本。
+`skills.lock` 为每个 skill 记录精确锁定的结果身份：精确版本、内容摘要，以及解析来源。
 
-机器本地 library 不是项目真相，而是 `install`、`pack`、`adopt`、`sync` 使用的本地物化层。
+机器本地 library 不是项目真相，而是 `install`、`pack`、`adopt`、`sync` 使用的本地缓存/物化层。
 
-`skillspm install` 是 source-aware 的：命中时先复用机器本地 cache；cache miss 时先回退到 pack 内容，再在可用时回退到受支持的已记录 source。cache 不是 install 的前置条件。
+`skillspm install` 会先读取 `skills.yaml`，在存在时参考 `skills.lock`，检查机器本地 library 中是否存在精确内容匹配；只有在 cache miss 时才回退到 pack 内容或已记录的本地/target source。若内容摘要不匹配，会 fail closed，而不是静默接受漂移。
 
 在这个分支里，可复用的已记录 source 仅限已经写入 `~/.skillspm/library.yaml` 的本地路径和 `adopt` 发现的 target 路径。provider-backed id 仍然可以从已有 cache 或 pack 安装，但不会直接重新抓取，因为项目真相里没有持久化足够的 provider fetch provenance。
+
+`skillspm pack` 是面向私有、本地、离线和跨机器恢复场景的补充机制，不会改变 source model，也不会取代 `skills.yaml` / `skills.lock` 作为项目真相。
 
 ## Manifest
 
@@ -41,10 +43,20 @@ targets:
 ## Lockfile
 
 ```yaml
-schema: skills-lock/v2
+schema: skills-lock/v3
 skills:
-  local/example: 0.1.0
-  github:owner/repo/skill: 1.2.3
+  local/example:
+    version: 0.1.0
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    resolved_from:
+      type: local
+      ref: ./skills/local-example
+  github:owner/repo/skill:
+    version: 1.2.3
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+    resolved_from:
+      type: pack
+      ref: github__owner__repo__skill@1.2.3
 ```
 
 ## 公共命令
@@ -109,12 +121,14 @@ skillspm sync openclaw,codex
 
 如果当前目录里存在多个 pack，会直接失败。
 
-选定输入之后，`install` 会按以下顺序物化每个已锁定 skill：
+选定输入之后，`install` 会按以下顺序处理每个 skill：
 
-1. 命中时复用机器本地 cache
-2. cache miss 时回退到 pack 内容
-3. pack miss 时回退到已记录的本地/target source 路径
-4. 只有在 cache 查找、pack 查找和 source 解析都失败后才报错
+1. 从 `skills.yaml` 读取期望的 skill id / range
+2. 在存在时使用 `skills.lock` 复现精确版本 + digest
+3. 命中精确内容时复用机器本地 library
+4. cache miss 时回退到 pack 内容
+5. pack miss 时回退到已记录的本地/target source 路径
+6. 若 digest 不匹配，则 fail closed，而不是静默接受漂移
 
 ## Pack 结构
 
@@ -126,6 +140,8 @@ skillspm sync openclaw,codex
 - 保存精确缓存 skill 内容的 `skills/`
 
 `manifest.yaml` 只是 pack 内部元数据，不是用户可编辑的环境真相。
+
+Pack 的定位是传输、私有/本地/离线分发以及恢复；它补充正常安装流程，而不是引入新的持久 source 类型。
 
 ## Doctor 检查范围
 
