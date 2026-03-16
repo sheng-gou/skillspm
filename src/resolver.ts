@@ -21,6 +21,13 @@ interface ResolveContext {
   library: Awaited<ReturnType<typeof loadLibrary>>;
 }
 
+interface MaterializedSkillResolution {
+  installPath?: string;
+  failureReason?: string;
+}
+
+const REUSABLE_RECORDED_SOURCE_KINDS = new Set(["local", "target"]);
+
 export interface ResolveProjectOptions {
   manifest?: SkillsManifest;
   lockfile?: SkillsLock;
@@ -61,13 +68,17 @@ async function resolveManifestSkill(
   chain: string[]
 ): Promise<void> {
   const version = selectSkillVersion(context, manifestSkill, chain);
-  const installPath = await resolveCachedOrPackedSkillPath(context, manifestSkill.id, version);
-  if (!installPath) {
-    throw new CliError(`Skill ${manifestSkill.id}@${version} is not available in the local library cache.`, 3);
+  const materialized = await resolveMaterializedSkillPath(context, manifestSkill.id, version);
+  if (!materialized.installPath) {
+    throw new CliError(
+      `Unable to materialize ${manifestSkill.id}@${version}: cache lookup failed: not present in the machine-local library cache; source resolution failed: ${materialized.failureReason ?? "no reusable source provenance recorded"}.`,
+      3
+    );
   }
 
+  const installPath = materialized.installPath;
   if (!(await exists(installPath)) || !(await isDirectory(installPath))) {
-    throw new CliError(`Cached skill path is missing for ${manifestSkill.id}@${version}: ${installPath}`, 4);
+    throw new CliError(`Resolved skill path is missing for ${manifestSkill.id}@${version}: ${installPath}`, 4);
   }
   await assertSkillRootMarker(installPath, `Skill ${manifestSkill.id}@${version}`);
 
@@ -128,26 +139,87 @@ function selectSkillVersion(context: ResolveContext, manifestSkill: ManifestSkil
 
   const via = chain.length > 0 ? ` via ${chain.join(" -> ")}` : "";
   throw new CliError(
-    `Unable to resolve ${manifestSkill.id}${requested ? ` (${requested})` : ""}${via}. Cache it with \`skillspm add <content>\`, install from a pack, or freeze exact versions first.`,
+    `Unable to resolve an exact version for ${manifestSkill.id}${requested ? ` (${requested})` : ""}${via}. No matching version was found in skills.lock, the provided pack, or recorded library metadata. Freeze exact versions, install from a pack, or add/adopt a source that can be materialized locally first.`,
     3
   );
 }
 
-async function resolveCachedOrPackedSkillPath(
+async function resolveMaterializedSkillPath(
   context: ResolveContext,
   skillId: string,
   version: string
-): Promise<string | undefined> {
+): Promise<MaterializedSkillResolution> {
+  const layout = resolveScopeLayout(context.cwd);
+  const cachedPath = await resolveCachedSkillPath(layout, context.library, skillId, version);
+  if (cachedPath) {
+    return { installPath: cachedPath };
+  }
+
+  const sourceFailures: string[] = [];
   const packPath = context.pack?.manifest.skills[skillId];
   if (packPath && packPath.version === version) {
     const candidate = path.join(context.pack.skillsDir, packPath.entry);
     if (await exists(candidate)) {
-      return candidate;
+      return { installPath: candidate };
     }
+    sourceFailures.push(`pack entry was declared but missing at ${candidate}`);
   }
 
-  const layout = resolveScopeLayout(context.cwd);
-  return resolveCachedSkillPath(layout, context.library, skillId, version);
+  const recordedSource = await resolveRecordedSourcePath(context, skillId, version);
+  if (recordedSource.installPath) {
+    return recordedSource;
+  }
+
+  return {
+    failureReason: [...sourceFailures, recordedSource.failureReason ?? "no reusable source provenance recorded"].join("; ")
+  };
+}
+
+async function resolveRecordedSourcePath(
+  context: ResolveContext,
+  skillId: string,
+  version: string
+): Promise<MaterializedSkillResolution> {
+  const source = context.library.skills[skillId]?.versions[version]?.source;
+  if (!source) {
+    return {
+      failureReason: "no reusable source provenance recorded"
+    };
+  }
+
+  if (source.kind === "provider") {
+    return {
+      failureReason: `recorded provider source cannot be re-resolved in this build: ${source.value}`
+    };
+  }
+
+  if (!REUSABLE_RECORDED_SOURCE_KINDS.has(source.kind)) {
+    return {
+      failureReason: `recorded source.kind must be one of local, target, provider; cache-miss reuse only supports local or target, received ${source.kind}: ${source.value}`
+    };
+  }
+
+  if (!(await exists(source.value))) {
+    return {
+      failureReason: `recorded ${source.kind} source path no longer exists: ${source.value}`
+    };
+  }
+
+  if (!(await isDirectory(source.value))) {
+    return {
+      failureReason: `recorded ${source.kind} source path is not a directory: ${source.value}`
+    };
+  }
+
+  try {
+    await assertSkillRootMarker(source.value, `Recorded ${source.kind} source for ${skillId}@${version}`);
+  } catch (error) {
+    return {
+      failureReason: error instanceof Error ? error.message : `recorded ${source.kind} source is not a valid skill root`
+    };
+  }
+
+  return { installPath: source.value };
 }
 
 async function registerNode(

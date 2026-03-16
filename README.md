@@ -20,6 +20,10 @@ Machine-local state lives in:
 
 The machine-local library is not project truth. It is the local materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
+`skillspm install` is source-aware. It reuses the machine-local cache on hit, and on cache miss it falls back to pack contents, then supported recorded sources when available. The cache is not a required prerequisite for install.
+
+In this branch, the only reusable recorded sources are local paths and adopted target paths already captured in `~/.skillspm/library.yaml`. Provider-backed ids are still installable from cache or from a pack, but they are not refetched directly because no provider fetch provenance is persisted in project truth.
+
 ## Manifest
 
 ```yaml
@@ -93,7 +97,7 @@ skillspm sync claude_code
 skillspm sync openclaw,codex
 ```
 
-`adopt` can also take a local directory path instead of a target name.
+`adopt` can also take a local directory path instead of a target name. When the source is a local path or known target, that source path is recorded in the machine-local library so later installs can recover from cache misses.
 
 ## `install` input precedence
 
@@ -104,6 +108,13 @@ skillspm sync openclaw,codex
 3. exactly one current-directory `*.skillspm.tgz`
 
 If multiple local packs exist, install fails closed.
+
+After choosing the input, `install` materializes each locked skill in this order:
+
+1. reuse the machine-local cache on hit
+2. on cache miss, fall back to pack contents
+3. on pack miss, fall back to recorded local/target source paths
+4. fail only after cache lookup, pack lookup, and source resolution fail
 
 ## Pack format
 

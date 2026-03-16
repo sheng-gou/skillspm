@@ -91,7 +91,7 @@ export async function runCli(argv: string[]): Promise<number> {
     withScopeOption(
       program
         .command("install")
-        .description("Resolve a skills environment and cache exact skills locally")
+        .description("Resolve a skills environment with cache reuse and source-aware fallback")
         .argument("[input]", "Explicit path to skills.yaml or *.skillspm.tgz")
     ).action(async (inputOrOptions: string | { global?: boolean } | undefined, options?: { global?: boolean }) => {
       const input = typeof inputOrOptions === "string" ? inputOrOptions : undefined;
@@ -403,12 +403,18 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     return [
       "Usage: skillspm install [input] [options]",
       "",
-      "Resolve a skills environment and cache exact skills locally",
+      "Resolve a skills environment with cache reuse and source-aware fallback",
       "",
       "Install input precedence:",
       "  1. explicit path to skills.yaml or *.skillspm.tgz",
       "  2. current scope skills.yaml",
       "  3. exactly one current-directory *.skillspm.tgz",
+      "",
+      "Materialization order:",
+      "  1. reuse the machine-local cache on hit",
+      "  2. on cache miss, fall back to pack contents",
+      "  3. on pack miss, fall back to recorded local/target source paths",
+      "  4. fail only after cache lookup, pack lookup, and source resolution fail",
       "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"
@@ -493,7 +499,7 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     "",
     "Public commands:",
     "  add               Unified add <content> entrypoint for local paths, GitHub URLs, and provider-backed skill ids",
-    "  install           Resolve a skills environment and cache exact skills locally",
+    "  install           Resolve a skills environment with cache reuse and source-aware fallback",
     "  pack              Bundle the current locked environment into a portable pack",
     "  freeze            Rewrite skills.lock with exact resolved versions",
     "  adopt             Discover existing skills and merge them into skills.yaml from [source]",

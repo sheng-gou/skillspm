@@ -5,6 +5,8 @@ import type { LibrarySkillSource, SkillsLibrary } from "./types";
 import { CliError } from "./errors";
 import { buildInstalledEntryName, copyDir, ensureDir, exists, readDocument, writeYamlDocument } from "./utils";
 
+const ALLOWED_LIBRARY_SOURCE_KINDS = new Set<LibrarySkillSource["kind"]>(["local", "target", "provider"]);
+
 export async function loadLibrary(layout: ScopeLayout): Promise<SkillsLibrary> {
   if (!(await exists(layout.libraryFile))) {
     return createEmptyLibrary();
@@ -60,10 +62,11 @@ export async function cacheSkill(
   }
 
   const currentRecord = library.skills[skillId] ?? { versions: {} };
+  const existingEntry = currentRecord.versions[version];
   currentRecord.versions[version] = {
     path: cachePath,
     cached_at: new Date().toISOString(),
-    ...(source ? { source } : {})
+    ...((source ?? existingEntry?.source) ? { source: source ?? existingEntry?.source } : {})
   };
   library.skills[skillId] = currentRecord;
   await writeLibrary(layout, library);
@@ -156,18 +159,21 @@ function validateLibrary(value: unknown): SkillsLibrary {
       if (typeof entry.cached_at !== "string") {
         errors.push(`skills.${skillId}.versions.${version}.cached_at must be a string`);
       }
-      if (
-        "source" in entry &&
-        entry.source !== undefined &&
-        (
-          !entry.source ||
-          typeof entry.source !== "object" ||
-          Array.isArray(entry.source) ||
-          typeof (entry.source as { kind?: unknown }).kind !== "string" ||
-          typeof (entry.source as { value?: unknown }).value !== "string"
-        )
-      ) {
-        errors.push(`skills.${skillId}.versions.${version}.source must be an object with kind and value strings`);
+      if ("source" in entry && entry.source !== undefined) {
+        if (!entry.source || typeof entry.source !== "object" || Array.isArray(entry.source)) {
+          errors.push(`skills.${skillId}.versions.${version}.source must be an object with kind and value strings`);
+          continue;
+        }
+
+        const source = entry.source as { kind?: unknown; value?: unknown };
+        if (typeof source.kind !== "string") {
+          errors.push(`skills.${skillId}.versions.${version}.source.kind must be a string`);
+        } else if (!ALLOWED_LIBRARY_SOURCE_KINDS.has(source.kind as LibrarySkillSource["kind"])) {
+          errors.push(`skills.${skillId}.versions.${version}.source.kind must be one of: local, target, provider`);
+        }
+        if (typeof source.value !== "string") {
+          errors.push(`skills.${skillId}.versions.${version}.source.value must be a string`);
+        }
       }
     }
   }

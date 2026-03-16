@@ -6,7 +6,7 @@ import { resolveDefaultTargetPath } from "./adapter";
 import { createDefaultManifest, loadManifest } from "./manifest";
 import type { ScopeLayout } from "./scope";
 import { loadSkillMetadata } from "./skill";
-import type { ManifestSkill, SkillsManifest, TargetType } from "./types";
+import type { LibrarySkillSource, ManifestSkill, SkillsManifest, TargetType } from "./types";
 import { assertSkillRootMarker, exists, printInfo, printWarning } from "./utils";
 
 const SKIP_SCAN_DIRS = new Set([".git", ".skillspm", ".skills", "dist", "node_modules", "vendor"]);
@@ -14,12 +14,14 @@ const SKIP_SCAN_DIRS = new Set([".git", ".skillspm", ".skills", "dist", "node_mo
 interface ScanRoot {
   label: string;
   path: string;
+  sourceKind: "local" | "target";
 }
 
 interface DiscoveredSkillEntry {
   manifestSkill: ManifestSkill;
   skillRoot: string;
   hasVersion: boolean;
+  source: LibrarySkillSource;
 }
 
 export interface ImportResult {
@@ -39,12 +41,12 @@ export async function importSkills(layout: ScopeLayout, commandCwd: string, sour
 
   for (const scanRoot of scanRoots) {
     printInfo(`Scanning ${scanRoot.label}...`);
-    for (const skill of await discoverSkillEntries(layout.rootDir, scanRoot.path)) {
+    for (const skill of await discoverSkillEntries(layout.rootDir, scanRoot)) {
       if (!skill.hasVersion) {
         warningCount += 1;
       }
       if (!discovered.has(skill.manifestSkill.id) && !manifest.skills.some((entry) => entry.id === skill.manifestSkill.id)) {
-        await cacheSkill(layout, library, skill.manifestSkill.id, skill.manifestSkill.version ?? "unversioned", skill.skillRoot);
+        await cacheSkill(layout, library, skill.manifestSkill.id, skill.manifestSkill.version ?? "unversioned", skill.skillRoot, skill.source);
         discovered.set(skill.manifestSkill.id, skill.manifestSkill);
       }
     }
@@ -70,10 +72,10 @@ async function resolveScanRoots(cwd: string, source?: string): Promise<ScanRoot[
     return resolveExplicitScanRoots(cwd, source);
   }
 
-  const roots: ScanRoot[] = [{ label: "cwd", path: cwd }];
+  const roots: ScanRoot[] = [{ label: "cwd", path: cwd, sourceKind: "local" }];
   const openclawPath = resolveDefaultTargetPath("openclaw");
   if (openclawPath && (await exists(openclawPath)) && path.resolve(openclawPath) !== path.resolve(cwd)) {
-    roots.push({ label: "openclaw", path: openclawPath });
+    roots.push({ label: "openclaw", path: openclawPath, sourceKind: "target" });
   }
   return roots;
 }
@@ -94,7 +96,7 @@ async function resolveExplicitScanRoot(cwd: string, source: string): Promise<Sca
     if (!targetPath || !(await exists(targetPath))) {
       throw new CliError(`Default ${source} skills directory was not found.`, 2);
     }
-    return { label: source, path: targetPath };
+    return { label: source, path: targetPath, sourceKind: "target" };
   }
 
   const resolvedPath = path.resolve(cwd, source);
@@ -103,24 +105,25 @@ async function resolveExplicitScanRoot(cwd: string, source: string): Promise<Sca
   }
   return {
     label: path.relative(cwd, resolvedPath) || ".",
-    path: resolvedPath
+    path: resolvedPath,
+    sourceKind: "local"
   };
 }
 
-async function discoverSkillEntries(rootDir: string, rootPath: string): Promise<DiscoveredSkillEntry[]> {
+async function discoverSkillEntries(rootDir: string, scanRoot: ScanRoot): Promise<DiscoveredSkillEntry[]> {
   const discovered = new Map<string, DiscoveredSkillEntry>();
-  await walkForSkills(rootDir, rootPath, rootPath, discovered);
+  await walkForSkills(rootDir, scanRoot, scanRoot.path, discovered);
   return [...discovered.values()];
 }
 
 async function walkForSkills(
   rootDir: string,
-  scanRootPath: string,
+  scanRoot: ScanRoot,
   currentPath: string,
   discovered: Map<string, DiscoveredSkillEntry>
 ): Promise<void> {
   if (await isSkillRoot(currentPath)) {
-    const skill = await createManifestSkill(rootDir, currentPath);
+    const skill = await createManifestSkill(rootDir, currentPath, scanRoot.sourceKind);
     if (!discovered.has(skill.manifestSkill.id)) {
       discovered.set(skill.manifestSkill.id, skill);
     }
@@ -141,10 +144,10 @@ async function walkForSkills(
     if (SKIP_SCAN_DIRS.has(entry.name)) {
       continue;
     }
-    if (entry.name.startsWith(".") && path.resolve(currentPath) === path.resolve(scanRootPath)) {
+    if (entry.name.startsWith(".") && path.resolve(currentPath) === path.resolve(scanRoot.path)) {
       continue;
     }
-    await walkForSkills(rootDir, scanRootPath, path.join(currentPath, entry.name), discovered);
+    await walkForSkills(rootDir, scanRoot, path.join(currentPath, entry.name), discovered);
   }
 }
 
@@ -152,7 +155,11 @@ async function isSkillRoot(candidatePath: string): Promise<boolean> {
   return (await exists(path.join(candidatePath, "skill.yaml"))) || (await exists(path.join(candidatePath, "SKILL.md")));
 }
 
-async function createManifestSkill(rootDir: string, skillRoot: string): Promise<DiscoveredSkillEntry> {
+async function createManifestSkill(
+  rootDir: string,
+  skillRoot: string,
+  sourceKind: "local" | "target"
+): Promise<DiscoveredSkillEntry> {
   void rootDir;
   await assertSkillRootMarker(skillRoot, `Adopted skill ${skillRoot}`);
   const metadata = await loadSkillMetadata(skillRoot);
@@ -163,6 +170,10 @@ async function createManifestSkill(rootDir: string, skillRoot: string): Promise<
       version
     },
     skillRoot,
-    hasVersion: Boolean(metadata?.version)
+    hasVersion: Boolean(metadata?.version),
+    source: {
+      kind: sourceKind,
+      value: skillRoot
+    }
   };
 }

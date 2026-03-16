@@ -20,6 +20,10 @@
 
 机器本地 library 不是项目真相，而是 `install`、`pack`、`adopt`、`sync` 使用的本地物化层。
 
+`skillspm install` 是 source-aware 的：命中时先复用机器本地 cache；cache miss 时先回退到 pack 内容，再在可用时回退到受支持的已记录 source。cache 不是 install 的前置条件。
+
+在这个分支里，可复用的已记录 source 仅限已经写入 `~/.skillspm/library.yaml` 的本地路径和 `adopt` 发现的 target 路径。provider-backed id 仍然可以从已有 cache 或 pack 安装，但不会直接重新抓取，因为项目真相里没有持久化足够的 provider fetch provenance。
+
 ## Manifest
 
 ```yaml
@@ -93,7 +97,7 @@ skillspm sync claude_code
 skillspm sync openclaw,codex
 ```
 
-`adopt` 也可以直接接收一个本地目录路径，而不是 target 名称。
+`adopt` 也可以直接接收一个本地目录路径，而不是 target 名称。对于本地路径和已知 target，`adopt` 会把 source 路径记录到机器本地 library 中，以便后续 install 在 cache miss 时恢复。
 
 ## `install` 输入优先级
 
@@ -104,6 +108,13 @@ skillspm sync openclaw,codex
 3. 当前目录里唯一的 `*.skillspm.tgz`
 
 如果当前目录里存在多个 pack，会直接失败。
+
+选定输入之后，`install` 会按以下顺序物化每个已锁定 skill：
+
+1. 命中时复用机器本地 cache
+2. cache miss 时回退到 pack 内容
+3. pack miss 时回退到已记录的本地/target source 路径
+4. 只有在 cache 查找、pack 查找和 source 解析都失败后才报错
 
 ## Pack 结构
 

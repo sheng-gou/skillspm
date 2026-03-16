@@ -53,7 +53,7 @@ For local paths, `add` copies the skill into the machine-local library and write
 
 ### `skillspm install [input]`
 
-Resolves the declared environment and caches exact skills locally.
+Resolves the declared environment with cache reuse and source-aware materialization.
 
 Input precedence is:
 
@@ -62,6 +62,13 @@ Input precedence is:
 3. exactly one current-directory `*.skillspm.tgz`
 
 If multiple local packs exist, install fails closed.
+
+Materialization order is:
+
+1. reuse the machine-local cache on hit
+2. on cache miss, fall back to pack contents
+3. on pack miss, fall back to recorded local/target source paths
+4. fail only after cache lookup, pack lookup, and source resolution fail
 
 ### `skillspm pack [out]`
 
