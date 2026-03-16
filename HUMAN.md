@@ -2,50 +2,56 @@
 
 This repository uses `skillspm` to manage a declarative Skills environment.
 
-## Phase 2 model in one view
+## 0.3.0 model in one view
 
 Project truth lives in:
 
 - `skills.yaml`
 - `skills.lock`
 
-Machine-local cache lives in:
+Machine-local state lives in:
 
 - `~/.skillspm/library.yaml`
 - `~/.skillspm/skills/`
 
 In short:
 
-- `skills.yaml` = desired environment
+- `skills.yaml` = desired environment, with only `skills` and optional `targets`
 - `skills.lock` = exact resolved versions
-- `~/.skillspm/*` = machine-local cache used by `install`, `pack`, and `sync`
+- `~/.skillspm/*` = machine-local cache used by `install`, `pack`, `adopt`, and `sync`
 
 The cache is not the source of truth for the project.
 
 ## Most important commands
 
-These are the public Phase-2 commands to keep in mind:
-
 ```bash
-skillspm add
-skillspm install
-skillspm pack
+skillspm add <content>
+skillspm install [input]
+skillspm pack [out]
 skillspm freeze
-skillspm adopt
-skillspm sync
+skillspm adopt [source]
+skillspm sync [target]
 skillspm doctor
-skillspm help
+skillspm help [command]
 ```
 
 ## What each command does
 
-### `skillspm add`
+### `skillspm add <content>`
 
-Adds a root skill entry to `skills.yaml`.
+Unified entrypoint for local paths, GitHub inputs, and provider-backed ids.
 
-Use this when you want the project manifest to include a new skill id, version range, or local path.
+Examples:
 
-### `skillspm install`
+```bash
+skillspm add ./skills/my-skill
+skillspm add owner/repo/skill --provider github
+skillspm add example/skill --provider openclaw
+```
+
+For local paths, `add` copies the skill into the machine-local library and writes only `id` and `version` into `skills.yaml`.
+
+### `skillspm install [input]`
 
 Resolves the declared environment and caches exact skills locally.
 
@@ -57,7 +63,7 @@ Input precedence is:
 
 If multiple local packs exist, install fails closed.
 
-### `skillspm pack`
+### `skillspm pack [out]`
 
 Bundles the current locked environment into a portable `.skillspm.tgz` file.
 
@@ -74,27 +80,37 @@ Rewrites `skills.lock` with exact resolved versions.
 
 Use this when you intentionally want to record the current resolved state.
 
-### `skillspm adopt`
+### `skillspm adopt [source]`
 
 Discovers existing skills and merges them into `skills.yaml`.
 
-Use this when adopting an existing setup into the Phase-2 manifest model.
+Examples:
 
-### `skillspm sync`
+```bash
+skillspm adopt openclaw
+skillspm adopt openclaw,codex
+skillspm adopt ./agent-skills
+```
 
-Writes the currently locked skills into configured targets from the local library cache.
+### `skillspm sync [target]`
+
+Writes the currently locked skills into one or more targets from the local library cache.
+
+Examples:
+
+```bash
+skillspm sync openclaw
+skillspm sync claude_code
+skillspm sync openclaw,codex
+```
 
 By default, sync is non-destructive: it updates managed locked entries and does not prune unrelated target contents.
 
 ### `skillspm doctor`
 
-Checks manifest, lockfile, cache, and targets.
+Checks manifest, lockfile, library/cache, pack readiness, targets, and project/global conflicts.
 
 Use `skillspm doctor --json` when you want machine-readable diagnostics.
-
-### `skillspm help`
-
-Shows the current command surface and flags.
 
 ## Typical workflows
 
@@ -108,7 +124,7 @@ skillspm doctor
 If targets are configured and should be updated:
 
 ```bash
-skillspm sync
+skillspm sync openclaw
 ```
 
 ### Add a new root skill
@@ -136,7 +152,7 @@ skillspm freeze
 
 Defines the desired Skills environment for the project.
 
-In the Phase-2 model it keeps root `skills` and `targets`.
+Keep only root `skills` and optional `targets` here.
 
 ### `skills.lock`
 
@@ -163,4 +179,4 @@ If you change command behavior or user-facing workflow, keep these files aligned
 
 ## In one sentence
 
-Humans should think of `skillspm` as a reproducible Skills environment manager centered on `skills.yaml` and `skills.lock`, with a machine-local cache under `~/.skillspm/`.
+Think of `skillspm` as a reproducible Skills environment manager centered on a minimal `skills.yaml`, an exact `skills.lock`, and a machine-local cache under `~/.skillspm/`.

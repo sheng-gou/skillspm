@@ -1,7 +1,6 @@
 export interface ManifestSkill {
   id: string;
   version?: string;
-  path?: string;
 }
 
 export interface ManifestTarget {
@@ -14,7 +13,6 @@ export type TargetType = ManifestTarget["type"];
 export type InstallMode = "copy" | "symlink";
 
 export interface SkillsManifest {
-  schema: "skills/v2";
   skills: ManifestSkill[];
   targets?: ManifestTarget[];
 }
@@ -52,9 +50,15 @@ export interface SkillsLock {
   skills: Record<string, string>;
 }
 
+export interface LibrarySkillSource {
+  kind: "local" | "target" | "provider";
+  value: string;
+}
+
 export interface LibrarySkillVersion {
   path: string;
   cached_at: string;
+  source?: LibrarySkillSource;
 }
 
 export interface LibrarySkillRecord {

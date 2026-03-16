@@ -1,7 +1,7 @@
 import path from "node:path";
 import semver from "semver";
 import type { ScopeLayout } from "./scope";
-import type { SkillsLibrary } from "./types";
+import type { LibrarySkillSource, SkillsLibrary } from "./types";
 import { CliError } from "./errors";
 import { buildInstalledEntryName, copyDir, ensureDir, exists, readDocument, writeYamlDocument } from "./utils";
 
@@ -26,7 +26,16 @@ export async function writeLibrary(layout: ScopeLayout, library: SkillsLibrary):
           skillId,
           {
             versions: Object.fromEntries(
-              Object.entries(record.versions).sort(([left], [right]) => left.localeCompare(right))
+              Object.entries(record.versions)
+                .sort(([left], [right]) => left.localeCompare(right))
+                .map(([version, entry]) => [
+                  version,
+                  {
+                    path: entry.path,
+                    cached_at: entry.cached_at,
+                    ...(entry.source ? { source: entry.source } : {})
+                  }
+                ])
             )
           }
         ])
@@ -39,7 +48,8 @@ export async function cacheSkill(
   library: SkillsLibrary,
   skillId: string,
   version: string,
-  sourcePath: string
+  sourcePath: string,
+  source?: LibrarySkillSource
 ): Promise<string> {
   await ensureDir(layout.cacheDir);
   await ensureDir(layout.librarySkillsDir);
@@ -52,7 +62,8 @@ export async function cacheSkill(
   const currentRecord = library.skills[skillId] ?? { versions: {} };
   currentRecord.versions[version] = {
     path: cachePath,
-    cached_at: new Date().toISOString()
+    cached_at: new Date().toISOString(),
+    ...(source ? { source } : {})
   };
   library.skills[skillId] = currentRecord;
   await writeLibrary(layout, library);
@@ -144,6 +155,19 @@ function validateLibrary(value: unknown): SkillsLibrary {
       }
       if (typeof entry.cached_at !== "string") {
         errors.push(`skills.${skillId}.versions.${version}.cached_at must be a string`);
+      }
+      if (
+        "source" in entry &&
+        entry.source !== undefined &&
+        (
+          !entry.source ||
+          typeof entry.source !== "object" ||
+          Array.isArray(entry.source) ||
+          typeof (entry.source as { kind?: unknown }).kind !== "string" ||
+          typeof (entry.source as { value?: unknown }).value !== "string"
+        )
+      ) {
+        errors.push(`skills.${skillId}.versions.${version}.source must be an object with kind and value strings`);
       }
     }
   }

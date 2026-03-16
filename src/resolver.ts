@@ -7,7 +7,7 @@ import { loadManifest } from "./manifest";
 import { loadSkillMetadata } from "./skill";
 import type { LoadedPack } from "./pack";
 import type { ManifestSkill, ResolutionResult, ResolvedSkillNode, SkillDependency, SkillsLock, SkillsManifest } from "./types";
-import { assertSkillRootMarker, exists, isDirectory, resolveFileUrlOrPath } from "./utils";
+import { assertSkillRootMarker, exists, isDirectory } from "./utils";
 import { resolveScopeLayout } from "./scope";
 
 interface ResolveContext {
@@ -60,11 +60,6 @@ async function resolveManifestSkill(
   isRoot: boolean,
   chain: string[]
 ): Promise<void> {
-  if (manifestSkill.path) {
-    await resolvePathSkill(context, manifestSkill, manifestSkill.path, isRoot, chain);
-    return;
-  }
-
   const version = selectSkillVersion(context, manifestSkill, chain);
   const installPath = await resolveCachedOrPackedSkillPath(context, manifestSkill.id, version);
   if (!installPath) {
@@ -90,41 +85,6 @@ async function resolveManifestSkill(
     metadata,
     root: isRoot
   };
-  await registerNode(context, node, manifestSkill.version, chain);
-
-  for (const dependency of node.dependencies) {
-    await resolveDependency(context, dependency, [...chain, node.id]);
-  }
-}
-
-async function resolvePathSkill(
-  context: ResolveContext,
-  manifestSkill: ManifestSkill,
-  configuredPath: string,
-  isRoot: boolean,
-  chain: string[]
-): Promise<void> {
-  const absolutePath = resolveFileUrlOrPath(context.cwd, configuredPath);
-  if (!(await exists(absolutePath))) {
-    throw new CliError(`Local skill path for ${manifestSkill.id} does not exist: ${configuredPath}`, 4);
-  }
-  if (!(await isDirectory(absolutePath))) {
-    throw new CliError(`Local skill path for ${manifestSkill.id} is not a directory: ${configuredPath}`, 4);
-  }
-  await assertSkillRootMarker(absolutePath, `Skill ${manifestSkill.id}`);
-
-  const metadata = await loadSkillMetadata(absolutePath);
-  const resolvedId = metadata?.id ?? manifestSkill.id;
-  const version = metadata?.version ?? manifestSkill.version ?? "unversioned";
-  const node: ResolvedSkillNode = {
-    id: resolvedId,
-    version,
-    dependencies: metadata?.dependencies ?? [],
-    installPath: absolutePath,
-    metadata,
-    root: isRoot
-  };
-  ensureMatchingId(manifestSkill.id, node.id);
   await registerNode(context, node, manifestSkill.version, chain);
 
   for (const dependency of node.dependencies) {
@@ -167,7 +127,10 @@ function selectSkillVersion(context: ResolveContext, manifestSkill: ManifestSkil
   }
 
   const via = chain.length > 0 ? ` via ${chain.join(" -> ")}` : "";
-  throw new CliError(`Unable to resolve ${manifestSkill.id}${requested ? ` (${requested})` : ""}${via}. Add a local path, install from a pack, or freeze exact versions first.`, 3);
+  throw new CliError(
+    `Unable to resolve ${manifestSkill.id}${requested ? ` (${requested})` : ""}${via}. Cache it with \`skillspm add <content>\`, install from a pack, or freeze exact versions first.`,
+    3
+  );
 }
 
 async function resolveCachedOrPackedSkillPath(

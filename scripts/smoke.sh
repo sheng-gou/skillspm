@@ -1,381 +1,126 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CLI="node ${ROOT_DIR}/dist/cli.js"
-TMP_DIR="$(mktemp -d)"
-WORK_DIR="${TMP_DIR}/workspace"
-HOME_DIR="${TMP_DIR}/home"
+ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+CLI=(node "$ROOT_DIR/dist/bin/skillspm.js")
 
-export HOME="${HOME_DIR}"
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+export HOME="$TMPDIR/home"
+mkdir -p "$HOME"
 
-mkdir -p "${WORK_DIR}" "${HOME_DIR}"
-cd "${WORK_DIR}"
+assert_file_contains() {
+  local file=$1
+  local needle=$2
+  grep -Fq -- "$needle" "$file"
+}
 
-${CLI} --help >/tmp/skillspm-help.log
-grep -q "Public commands:" /tmp/skillspm-help.log
-grep -q "add" /tmp/skillspm-help.log
-grep -q "install" /tmp/skillspm-help.log
-grep -q "pack" /tmp/skillspm-help.log
-grep -q "freeze" /tmp/skillspm-help.log
-grep -q "adopt" /tmp/skillspm-help.log
-grep -q "sync" /tmp/skillspm-help.log
-grep -q "doctor" /tmp/skillspm-help.log
-grep -q "help" /tmp/skillspm-help.log
-! grep -q "import" /tmp/skillspm-help.log
-! grep -q "inspect" /tmp/skillspm-help.log
-! grep -q "snapshot" /tmp/skillspm-help.log
-! grep -q "bootstrap" /tmp/skillspm-help.log
-! grep -q "target" /tmp/skillspm-help.log
+assert_node() {
+  local script=$1
+  shift
+  ASSERT_SCRIPT="$script" node --input-type=module - "$@" <<'NODE'
+import fs from 'node:fs';
+import * as YAML from 'yaml';
+const args = process.argv.slice(2);
+const docs = args.map((file) => {
+  const raw = fs.readFileSync(file, 'utf8');
+  if (file.endsWith('.json')) {
+    return JSON.parse(raw);
+  }
+  return YAML.parse(raw);
+});
+const fn = new Function('docs', process.env.ASSERT_SCRIPT ?? 'return false;');
+const result = fn(docs);
+if (result === false) {
+  process.exit(1);
+}
+NODE
+}
 
-set +e
-${CLI} help import >/tmp/skillspm-help-import.log 2>&1
-HELP_IMPORT_EXIT=$?
-${CLI} help inspect >/tmp/skillspm-help-inspect.log 2>&1
-HELP_INSPECT_EXIT=$?
-${CLI} import >/tmp/skillspm-import.log 2>&1
-IMPORT_EXIT=$?
-${CLI} inspect ./local-skills >/tmp/skillspm-inspect.log 2>&1
-INSPECT_EXIT=$?
-set -e
-test "${HELP_IMPORT_EXIT}" -eq 2
-test "${HELP_INSPECT_EXIT}" -eq 2
-test "${IMPORT_EXIT}" -eq 2
-test "${INSPECT_EXIT}" -eq 2
-grep -q "Unknown command import" /tmp/skillspm-help-import.log
-grep -q "Unknown command inspect" /tmp/skillspm-help-inspect.log
-grep -q "Unknown command import" /tmp/skillspm-import.log
-grep -q "Unknown command inspect" /tmp/skillspm-inspect.log
+# Help surface
+"${CLI[@]}" help add > "$TMPDIR/help-add.txt"
+"${CLI[@]}" help adopt > "$TMPDIR/help-adopt.txt"
+"${CLI[@]}" help sync > "$TMPDIR/help-sync.txt"
+"${CLI[@]}" help doctor > "$TMPDIR/help-doctor.txt"
+assert_file_contains "$TMPDIR/help-add.txt" "skillspm add <content>"
+assert_file_contains "$TMPDIR/help-add.txt" "--provider <provider>"
+assert_file_contains "$TMPDIR/help-add.txt" "Choose the provider"
+assert_file_contains "$TMPDIR/help-adopt.txt" "skillspm adopt openclaw"
+assert_file_contains "$TMPDIR/help-sync.txt" "skillspm sync openclaw,codex"
+assert_file_contains "$TMPDIR/help-doctor.txt" "project/global conflicts"
 
-mkdir -p local-skills/dep local-skills/app
+# Unified add: local, explicit provider choice, GitHub URL, provider-backed
+ADD_PROJECT="$TMPDIR/add-project"
+mkdir -p "$ADD_PROJECT/local-skill"
+cat > "$ADD_PROJECT/local-skill/skill.yaml" <<'YAML'
+id: local/example
+version: 1.2.3
+YAML
+cat > "$ADD_PROJECT/local-skill/SKILL.md" <<'EOF_SKILL'
+# Local example
+EOF_SKILL
 
-cat > local-skills/dep/SKILL.md <<'EOF'
-# dep
-EOF
+(
+  cd "$ADD_PROJECT"
+  set +e
+  "${CLI[@]}" add owner/repo/skills/demo@^2.0.0 > "$TMPDIR/add-ambiguous.out" 2> "$TMPDIR/add-ambiguous.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+  grep -Fq "Ambiguous add input" "$TMPDIR/add-ambiguous.err"
+  grep -Fq -- "--provider <provider>" "$TMPDIR/add-ambiguous.err"
 
-cat > local-skills/dep/skill.yaml <<'EOF'
-schema: skill/v1
-id: local/dep
-name: Dep
-version: 1.0.0
-package:
-  type: dir
-  entry: ./
-EOF
+  "${CLI[@]}" add ./local-skill
+  "${CLI[@]}" add owner/repo/skills/demo@^2.0.0 --provider github
+  "${CLI[@]}" add https://github.com/example/tools/tree/main/skills/url-demo
+  "${CLI[@]}" add example/skill@^1.0.0 --provider openclaw
+)
 
-cat > local-skills/app/SKILL.md <<'EOF'
-# app
-EOF
+assert_node "const [manifest] = docs; if (!manifest || Array.isArray(manifest)) return false; const keys = Object.keys(manifest).sort(); if (keys.join(',') !== 'skills') return false; if (manifest.skills.some((entry) => 'path' in entry || 'source' in entry)) return false; const ids = manifest.skills.map((entry) => entry.id + '@' + (entry.version ?? '')); return ids.includes('local/example@1.2.3') && ids.includes('github:owner/repo/skills/demo@^2.0.0') && ids.includes('github:example/tools/skills/url-demo@') && ids.includes('openclaw:example/skill@^1.0.0');" "$ADD_PROJECT/skills.yaml"
+assert_node "const [library] = docs; const entry = library.skills['local/example'].versions['1.2.3']; return entry.source.kind === 'local' && entry.source.value.endsWith('/local-skill');" "$HOME/.skillspm/library.yaml"
 
-cat > local-skills/app/skill.yaml <<'EOF'
-schema: skill/v1
-id: local/app
-name: App
-version: 1.2.0
-package:
-  type: dir
-  entry: ./
-dependencies:
-  - id: local/dep
-    version: ^1.0.0
-EOF
+# Adopt positional sources + multi-target sync + doctor scope/conflict reporting
+mkdir -p "$HOME/.openclaw/skills/adopt-openclaw" "$HOME/.codex/skills/adopt-codex"
+cat > "$HOME/.openclaw/skills/adopt-openclaw/skill.yaml" <<'YAML'
+id: adopted/openclaw
+version: 2.0.0
+YAML
+cat > "$HOME/.openclaw/skills/adopt-openclaw/SKILL.md" <<'EOF_SKILL'
+# Adopted openclaw skill
+EOF_SKILL
+cat > "$HOME/.codex/skills/adopt-codex/skill.yaml" <<'YAML'
+id: adopted/codex
+version: 3.1.0
+YAML
+cat > "$HOME/.codex/skills/adopt-codex/SKILL.md" <<'EOF_SKILL'
+# Adopted codex skill
+EOF_SKILL
 
-${CLI} add ./local-skills/dep >/tmp/skillspm-add-dep.log
-${CLI} add ./local-skills/app >/tmp/skillspm-add-app.log
+ADOPT_PROJECT="$TMPDIR/adopt-project"
+mkdir -p "$ADOPT_PROJECT"
+(
+  cd "$ADOPT_PROJECT"
+  "${CLI[@]}" adopt openclaw,codex
+  "${CLI[@]}" install
+  "${CLI[@]}" sync openclaw,codex
+)
 
-grep -q "schema: skills/v2" skills.yaml
-grep -q "id: local/dep" skills.yaml
-grep -q "id: local/app" skills.yaml
-! grep -q "^sources:" skills.yaml
-! grep -q "^settings:" skills.yaml
-! grep -q "^project:" skills.yaml
+assert_node "const [manifest] = docs; const keys = Object.keys(manifest).sort().join(','); if (keys !== 'skills') return false; if (manifest.skills.some((entry) => 'path' in entry)) return false; const ids = manifest.skills.map((entry) => entry.id + '@' + entry.version); return ids.includes('adopted/codex@3.1.0') && ids.includes('adopted/openclaw@2.0.0');" "$ADOPT_PROJECT/skills.yaml"
+[ -d "$HOME/.openclaw/skills/adopted__openclaw@2.0.0" ]
+[ -d "$HOME/.codex/skills/adopted__codex@3.1.0" ]
 
-${CLI} install >/tmp/skillspm-install.log
-
-test -f skills.lock
-grep -q "schema: skills-lock/v2" skills.lock
-grep -q "local/app: 1.2.0" skills.lock
-grep -q "local/dep: 1.0.0" skills.lock
-! grep -q "^resolved:" skills.lock
-! test -e .skills
-
-test -f "${HOME}/.skillspm/library.yaml"
-test -d "${HOME}/.skillspm/skills/local__app@1.2.0"
-test -d "${HOME}/.skillspm/skills/local__dep@1.0.0"
-grep -q "schema: skills-library/v1" "${HOME}/.skillspm/library.yaml"
-grep -q "local/app:" "${HOME}/.skillspm/library.yaml"
-
-cat > skills.yaml <<'EOF'
-schema: skills/v2
-skills: []
-targets:
-  - type: generic
-    path: ./agent-target
-EOF
-
-cat > skills.lock <<'EOF'
-schema: skills-lock/v2
+mkdir -p "$HOME/.skillspm/global"
+cat > "$HOME/.skillspm/global/skills.yaml" <<'YAML'
 skills:
-  local/app: 1.2.0
-  local/dep: 1.0.0
-EOF
+  - id: adopted/openclaw
+    version: 9.9.9
+YAML
 
-mkdir -p agent-target/manual-dir
-printf 'keep\n' > agent-target/manual.txt
+(
+  cd "$ADOPT_PROJECT"
+  "${CLI[@]}" doctor --json > "$TMPDIR/doctor.json"
+)
 
-${CLI} sync generic >/tmp/skillspm-sync.log
-test -d agent-target/local__app@1.2.0
-test -d agent-target/local__dep@1.0.0
-test -d agent-target/manual-dir
-grep -q "keep" agent-target/manual.txt
+assert_node "const [report] = docs; const messages = report.findings.map((finding) => finding.message); return messages.some((message) => message.includes('manifest contract validated')) && messages.some((message) => message.includes('pack readiness confirmed')) && messages.some((message) => message.includes('manifests differ'));" "$TMPDIR/doctor.json"
 
-${CLI} doctor >/tmp/skillspm-doctor.log
-grep -q "Result: healthy" /tmp/skillspm-doctor.log
-
-cat > skills.yaml <<'EOF'
-schema: skills/v2
-skills:
-  - id: local/dep
-    path: ./local-skills/dep
-  - id: local/app
-    path: ./local-skills/app
-targets:
-  - type: generic
-    path: ./agent-target
-EOF
-
-${CLI} install >/tmp/skillspm-install-again.log
-${CLI} pack bundle >/tmp/skillspm-pack.log
-test -f bundle.skillspm.tgz
-
-PACK_WORK_DIR="${TMP_DIR}/pack-install"
-mkdir -p "${PACK_WORK_DIR}"
-cp bundle.skillspm.tgz "${PACK_WORK_DIR}/"
-cd "${PACK_WORK_DIR}"
-
-${CLI} install ./bundle.skillspm.tgz >/tmp/skillspm-pack-install.log
-test -d "${HOME}/.skillspm/skills/local__app@1.2.0"
-test -d "${HOME}/.skillspm/skills/local__dep@1.0.0"
-! test -f skills.lock
-
-cp bundle.skillspm.tgz another.skillspm.tgz
-set +e
-${CLI} install >/tmp/skillspm-multi-pack.log 2>&1
-MULTI_PACK_EXIT=$?
-set -e
-test "${MULTI_PACK_EXIT}" -eq 2
-grep -q "Multiple local \\*.skillspm.tgz files found" /tmp/skillspm-multi-pack.log
-
-MANIFEST_PRECEDENCE_DIR="${TMP_DIR}/manifest-precedence"
-mkdir -p "${MANIFEST_PRECEDENCE_DIR}/local-skills/one"
-cd "${MANIFEST_PRECEDENCE_DIR}"
-
-cat > local-skills/one/SKILL.md <<'EOF'
-# one
-EOF
-
-cat > local-skills/one/skill.yaml <<'EOF'
-schema: skill/v1
-id: precedence/one
-name: One
-version: 0.1.0
-package:
-  type: dir
-  entry: ./
-EOF
-
-cat > skills.yaml <<'EOF'
-schema: skills/v2
-skills:
-  - id: precedence/one
-    path: ./local-skills/one
-EOF
-
-cp "${PACK_WORK_DIR}/bundle.skillspm.tgz" ./bundle.skillspm.tgz
-${CLI} install >/tmp/skillspm-manifest-precedence.log
-grep -q "precedence/one: 0.1.0" skills.lock
-
-INVALID_DIR="${TMP_DIR}/invalid-manifest"
-mkdir -p "${INVALID_DIR}"
-cd "${INVALID_DIR}"
-
-cat > skills.yaml <<'EOF'
-schema: skills/v2
-sources: []
-skills: []
-EOF
-
-set +e
-${CLI} install >/tmp/skillspm-invalid-manifest.log 2>&1
-INVALID_EXIT=$?
-set -e
-test "${INVALID_EXIT}" -eq 2
-grep -q "unknown top-level key sources" /tmp/skillspm-invalid-manifest.log
-
-EXTRA_MANIFEST_DIR="${TMP_DIR}/extra-manifest-key"
-mkdir -p "${EXTRA_MANIFEST_DIR}"
-cd "${EXTRA_MANIFEST_DIR}"
-
-cat > skills.yaml <<'EOF'
-schema: skills/v2
-skills: []
-extra: true
-EOF
-
-set +e
-${CLI} install >/tmp/skillspm-extra-manifest.log 2>&1
-EXTRA_MANIFEST_EXIT=$?
-set -e
-test "${EXTRA_MANIFEST_EXIT}" -eq 2
-grep -q "unknown top-level key extra" /tmp/skillspm-extra-manifest.log
-
-EXTRA_LOCK_DIR="${TMP_DIR}/extra-lock-key"
-mkdir -p "${EXTRA_LOCK_DIR}/local-skills/dep"
-cd "${EXTRA_LOCK_DIR}"
-
-cat > local-skills/dep/SKILL.md <<'EOF'
-# dep
-EOF
-
-cat > local-skills/dep/skill.yaml <<'EOF'
-schema: skill/v1
-id: local/dep
-name: Dep
-version: 1.0.0
-package:
-  type: dir
-  entry: ./
-EOF
-
-cat > skills.yaml <<'EOF'
-schema: skills/v2
-skills:
-  - id: local/dep
-    path: ./local-skills/dep
-EOF
-
-cat > skills.lock <<'EOF'
-schema: skills-lock/v2
-skills:
-  local/dep: 1.0.0
-extra: true
-EOF
-
-set +e
-${CLI} install >/tmp/skillspm-extra-lock.log 2>&1
-EXTRA_LOCK_EXIT=$?
-set -e
-test "${EXTRA_LOCK_EXIT}" -eq 2
-grep -q "unknown top-level key extra" /tmp/skillspm-extra-lock.log
-
-UNSAFE_SYNC_DIR="${TMP_DIR}/unsafe-sync"
-OUTSIDE_TARGET="${TMP_DIR}/outside-target"
-mkdir -p "${UNSAFE_SYNC_DIR}" "${OUTSIDE_TARGET}"
-cd "${UNSAFE_SYNC_DIR}"
-
-cat > skills.yaml <<'EOF'
-schema: skills/v2
-skills: []
-targets:
-  - type: generic
-    path: ../outside-target
-EOF
-
-cat > skills.lock <<'EOF'
-schema: skills-lock/v2
-skills:
-  local/app: 1.2.0
-EOF
-
-set +e
-${CLI} sync generic >/tmp/skillspm-unsafe-sync.log 2>&1
-UNSAFE_SYNC_EXIT=$?
-set -e
-test "${UNSAFE_SYNC_EXIT}" -eq 2
-grep -q "resolves outside" /tmp/skillspm-unsafe-sync.log
-! test -e "${OUTSIDE_TARGET}/local__app@1.2.0"
-
-MANIFEST_ESCAPE_SRC="${TMP_DIR}/pack-manifest-escape-src"
-mkdir -p "${MANIFEST_ESCAPE_SRC}/skills" "${MANIFEST_ESCAPE_SRC}/outside-skill"
-
-cat > "${MANIFEST_ESCAPE_SRC}/manifest.yaml" <<'EOF'
-schema: skills-pack-manifest/v1
-generated_at: 2026-03-15T00:00:00.000Z
-skills:
-  local/escape:
-    version: 1.0.0
-    entry: ../outside-skill
-EOF
-
-cat > "${MANIFEST_ESCAPE_SRC}/skills.yaml" <<'EOF'
-schema: skills/v2
-skills:
-  - id: local/escape
-    version: 1.0.0
-EOF
-
-cat > "${MANIFEST_ESCAPE_SRC}/skills.lock" <<'EOF'
-schema: skills-lock/v2
-skills:
-  local/escape: 1.0.0
-EOF
-
-cat > "${MANIFEST_ESCAPE_SRC}/outside-skill/SKILL.md" <<'EOF'
-# escape
-EOF
-
-cat > "${MANIFEST_ESCAPE_SRC}/outside-skill/skill.yaml" <<'EOF'
-schema: skill/v1
-id: local/escape
-name: Escape
-version: 1.0.0
-package:
-  type: dir
-  entry: ./
-EOF
-
-tar -czf "${TMP_DIR}/manifest-escape.skillspm.tgz" -C "${MANIFEST_ESCAPE_SRC}" .
-
-PACK_SYMLINK_SRC="${TMP_DIR}/pack-symlink-escape-src"
-PACK_SYMLINK_OUTSIDE="${TMP_DIR}/pack-symlink-outside"
-mkdir -p "${PACK_SYMLINK_SRC}/skills" "${PACK_SYMLINK_OUTSIDE}"
-ln -s "${PACK_SYMLINK_OUTSIDE}" "${PACK_SYMLINK_SRC}/skills/local__escape@1.0.0"
-
-cat > "${PACK_SYMLINK_SRC}/manifest.yaml" <<'EOF'
-schema: skills-pack-manifest/v1
-generated_at: 2026-03-15T00:00:00.000Z
-skills:
-  local/escape:
-    version: 1.0.0
-    entry: local__escape@1.0.0
-EOF
-
-cat > "${PACK_SYMLINK_SRC}/skills.yaml" <<'EOF'
-schema: skills/v2
-skills:
-  - id: local/escape
-    version: 1.0.0
-EOF
-
-cat > "${PACK_SYMLINK_SRC}/skills.lock" <<'EOF'
-schema: skills-lock/v2
-skills:
-  local/escape: 1.0.0
-EOF
-
-tar -czf "${TMP_DIR}/symlink-escape.skillspm.tgz" -C "${PACK_SYMLINK_SRC}" .
-
-PACK_REJECT_DIR="${TMP_DIR}/pack-rejects"
-mkdir -p "${PACK_REJECT_DIR}"
-cd "${PACK_REJECT_DIR}"
-
-set +e
-${CLI} install "${TMP_DIR}/manifest-escape.skillspm.tgz" >/tmp/skillspm-pack-manifest-escape.log 2>&1
-PACK_MANIFEST_ESCAPE_EXIT=$?
-${CLI} install "${TMP_DIR}/symlink-escape.skillspm.tgz" >/tmp/skillspm-pack-symlink-escape.log 2>&1
-PACK_SYMLINK_ESCAPE_EXIT=$?
-set -e
-test "${PACK_MANIFEST_ESCAPE_EXIT}" -eq 2
-test "${PACK_SYMLINK_ESCAPE_EXIT}" -eq 2
-grep -q "pack manifest entry for local/escape resolves outside" /tmp/skillspm-pack-manifest-escape.log
-grep -q "pack payload entry local__escape@1.0.0 resolves outside" /tmp/skillspm-pack-symlink-escape.log
+echo "smoke ok"

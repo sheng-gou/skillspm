@@ -2,63 +2,67 @@
 
 This repository uses `skillspm` to manage a declarative Skills environment.
 
-## Phase 2 contract
+## 0.3.0 contract
 
 Project truth lives in:
 
 - `skills.yaml`
 - `skills.lock`
 
-Machine-local cache lives in:
+Machine-local state lives in:
 
 - `~/.skillspm/library.yaml`
 - `~/.skillspm/skills/`
 
-`skills.yaml` keeps the root `skills` and `targets` for the environment.
+`skills.yaml` is intentionally minimal: only `skills` and optional `targets` belong there.
 
-`skills.lock` keeps the exact resolved skill versions.
+`skills.lock` keeps exact resolved versions under its `skills` map.
 
-The library cache is not project truth. It is the local materialization layer used by `install`, `pack`, and `sync`.
+The machine-local library is not project truth. It is the local materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
 ## Default workflow for agents
 
 Use this sequence unless the user asks for something different:
 
 1. `skillspm install`
-2. `skillspm doctor --json` if validation or diagnosis is needed
-3. `skillspm sync` when configured targets should receive the locked skills
+2. `skillspm doctor --json` when validation or diagnosis is needed
+3. `skillspm sync <target>` only when configured targets should be updated
 4. `skillspm freeze` only when the task explicitly requires updating `skills.lock`
 
 ## Public command surface
 
-Treat these as the current public Phase-2 commands:
+Treat these as the current public commands:
 
 ```bash
-skillspm add
-skillspm install
-skillspm pack
+skillspm add <content>
+skillspm install [input]
+skillspm pack [out]
 skillspm freeze
-skillspm adopt
-skillspm sync
+skillspm adopt [source]
+skillspm sync [target]
 skillspm doctor
-skillspm help
+skillspm help [command]
 ```
 
 Do not rely on removed command names in plans, examples, or repo guidance.
 
-## What each command is for
+## Command intent
 
-### `skillspm add`
+### `skillspm add <content>`
 
-Add a root skill entry to `skills.yaml`.
+Unified public entrypoint for local paths, GitHub inputs, and provider-backed ids.
 
-Use this when the desired environment should include a new skill id, version range, or local path.
+`--provider <provider>` is a first-class user choice for non-path inputs. Use it proactively when you want to force a provider interpretation.
 
-### `skillspm install`
+If a non-path input could match multiple providers and `--provider` is omitted, `skillspm add` should fail and ask the user to choose.
+
+For local paths, `add` should materialize into the machine-local library and then persist only `id` and `version` into `skills.yaml`.
+
+### `skillspm install [input]`
 
 Resolve the declared environment and cache exact skills locally.
 
-`skillspm install` selects input in this order:
+Input precedence is:
 
 1. explicit path to `skills.yaml` or `*.skillspm.tgz`
 2. current-scope `skills.yaml`
@@ -66,7 +70,7 @@ Resolve the declared environment and cache exact skills locally.
 
 If multiple local packs exist, install fails closed.
 
-### `skillspm pack`
+### `skillspm pack [out]`
 
 Bundle the current locked environment into a portable `.skillspm.tgz` pack.
 
@@ -85,17 +89,27 @@ Rewrite `skills.lock` with exact resolved versions.
 
 Do not run `freeze` automatically unless the task clearly requires updating the lockfile.
 
-### `skillspm adopt`
+### `skillspm adopt [source]`
 
 Discover existing skills and merge them into `skills.yaml`.
 
-Use this when the user wants to bring an existing setup under Phase-2 manifest management.
+Prefer direct examples such as:
 
-### `skillspm sync`
+- `skillspm adopt openclaw`
+- `skillspm adopt openclaw,codex`
+- `skillspm adopt ./agent-skills`
 
-Sync locked skills from the local library cache to configured targets.
+### `skillspm sync [target]`
 
-By default, `sync` is non-destructive:
+Sync locked skills from the local library cache to one or more targets.
+
+Prefer direct examples such as:
+
+- `skillspm sync openclaw`
+- `skillspm sync claude_code`
+- `skillspm sync openclaw,codex`
+
+Default sync is non-destructive:
 
 - it updates the locked skill entries it manages
 - it does not prune unrelated target contents
@@ -103,13 +117,9 @@ By default, `sync` is non-destructive:
 
 ### `skillspm doctor`
 
-Check manifest, lockfile, cache, and targets.
+Check manifest, lockfile, library/cache, pack readiness, targets, and project/global conflicts.
 
 Use `--json` when machine-readable diagnostics help the workflow.
-
-### `skillspm help`
-
-Use for the current command surface, flags, and examples.
 
 ## File responsibilities
 
@@ -117,7 +127,9 @@ Use for the current command surface, flags, and examples.
 
 Defines the desired Skills environment for this project.
 
-Agents should edit `skills.yaml` when changing root skills or targets.
+Agents should only persist root `skills` and optional `targets` here.
+
+Do not put local path or source provenance into this file.
 
 ### `skills.lock`
 
@@ -131,7 +143,7 @@ Agents should prefer:
 
 - editing `skills.yaml` when changing the desired environment
 - running `skillspm install` after manifest changes
-- running `skillspm sync` only when target updates are intended
+- running `skillspm sync <target>` only when target updates are intended
 - running `skillspm freeze` only when lockfile updates are part of the task
 
 Agents should avoid:

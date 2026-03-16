@@ -102,8 +102,9 @@ export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest,
 
 function resolveTargets(cwd: string, manifest: SkillsManifest, requestedTarget?: string): ResolvedTarget[] {
   if (requestedTarget) {
-    const targetType = parseTargetType(requestedTarget);
-    return [resolveTarget(cwd, manifest.targets?.find((target) => target.type === targetType) ?? { type: targetType })];
+    return parseTargetSelector(requestedTarget).map((targetType) => (
+      resolveTarget(cwd, manifest.targets?.find((target) => target.type === targetType) ?? { type: targetType })
+    ));
   }
 
   const configuredTargets = manifest.targets ?? [];
@@ -127,6 +128,14 @@ function resolveTarget(cwd: string, target: ManifestTarget): ResolvedTarget {
     containmentRoot: target.path ? cwd : path.dirname(resolvedPath),
     configuredPath: target.path
   };
+}
+
+function parseTargetSelector(value: string): TargetType[] {
+  const targets = [...new Set(value.split(",").map((entry) => entry.trim()).filter(Boolean).map((entry) => parseTargetType(entry)))];
+  if (targets.length === 0) {
+    throw new CliError("Target selector must not be empty.", 2);
+  }
+  return targets;
 }
 
 function parseTargetType(value: string): TargetType {

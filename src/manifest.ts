@@ -5,7 +5,9 @@ import type { ManifestSkill, ManifestTarget, SkillsManifest } from "./types";
 import { MANIFEST_FILE, ensureDir, exists, readDocument, writeYamlDocument } from "./utils";
 
 const SUPPORTED_RANGE_PATTERN = /^(?:\d+\.\d+\.\d+|\^\d+\.\d+\.\d+|~\d+\.\d+\.\d+|unversioned)$/;
-const ALLOWED_MANIFEST_KEYS = new Set(["schema", "skills", "targets"]);
+const ALLOWED_MANIFEST_KEYS = new Set(["skills", "targets"]);
+const ALLOWED_SKILL_KEYS = new Set(["id", "version"]);
+const ALLOWED_TARGET_KEYS = new Set(["type", "enabled", "path"]);
 
 export function isSupportedVersionRange(value: string): boolean {
   if (value === "unversioned") {
@@ -21,12 +23,9 @@ export function validateManifest(manifest: unknown): SkillsManifest {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new CliError("skills.yaml must be a YAML object", 2);
   }
-  if (value.schema !== "skills/v2") {
-    errors.push("schema must be skills/v2");
-  }
   for (const key of Object.keys(value)) {
     if (!ALLOWED_MANIFEST_KEYS.has(key)) {
-      errors.push(`unknown top-level key ${key}; allowed keys: schema, skills, targets`);
+      errors.push(`unknown top-level key ${key}; allowed keys: skills, targets`);
     }
   }
   if (!Array.isArray(value.skills)) {
@@ -63,11 +62,13 @@ function validateManifestSkill(skill: Partial<ManifestSkill>, errors: string[]):
     errors.push("skills entries must be objects");
     return;
   }
+  for (const key of Object.keys(skill as Record<string, unknown>)) {
+    if (!ALLOWED_SKILL_KEYS.has(key)) {
+      errors.push(`skill ${skill.id ?? "<unknown>"} has unknown key ${key}; allowed keys: id, version`);
+    }
+  }
   if (!skill.id || typeof skill.id !== "string") {
     errors.push("skill.id must be a string");
-  }
-  if (skill.path !== undefined && typeof skill.path !== "string") {
-    errors.push(`skill ${skill.id ?? "<unknown>"} path must be a string`);
   }
   if (skill.version !== undefined) {
     if (typeof skill.version !== "string") {
@@ -82,6 +83,11 @@ function validateTarget(target: Partial<ManifestTarget>, errors: string[]): void
   if (!target || typeof target !== "object" || Array.isArray(target)) {
     errors.push("targets entries must be objects");
     return;
+  }
+  for (const key of Object.keys(target as Record<string, unknown>)) {
+    if (!ALLOWED_TARGET_KEYS.has(key)) {
+      errors.push(`target ${target.type ?? "<unknown>"} has unknown key ${key}; allowed keys: type, enabled, path`);
+    }
   }
   if (!target.type || !["openclaw", "codex", "claude_code", "generic"].includes(target.type)) {
     errors.push(`target ${target.type ?? "<unknown>"} has unsupported type`);
@@ -108,12 +114,19 @@ export async function loadManifestFromPath(manifestPath: string): Promise<Skills
 export async function saveManifest(cwd: string, manifest: SkillsManifest): Promise<void> {
   const manifestPath = path.join(cwd, MANIFEST_FILE);
   await ensureDir(path.dirname(manifestPath));
-  await writeYamlDocument(manifestPath, manifest);
+  const validated = validateManifest(manifest);
+  await writeYamlDocument(manifestPath, {
+    skills: validated.skills.map((skill) => (
+      skill.version === undefined
+        ? { id: skill.id }
+        : { id: skill.id, version: skill.version }
+    )),
+    ...(validated.targets === undefined ? {} : { targets: validated.targets })
+  });
 }
 
 export function createDefaultManifest(): SkillsManifest {
   return {
-    schema: "skills/v2",
     skills: []
   };
 }

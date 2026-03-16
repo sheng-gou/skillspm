@@ -26,7 +26,6 @@ export async function packProject(layout: ScopeLayout, outFile: string): Promise
   }
 
   const packedManifest = {
-    schema: "skills/v2" as const,
     skills: manifest.skills.map((skill) => ({
       id: skill.id,
       ...(lockfile.skills[skill.id] ? { version: lockfile.skills[skill.id] } : skill.version ? { version: skill.version } : {})

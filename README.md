@@ -1,33 +1,33 @@
 # skillspm
 
-`skillspm` manages declarative Skills environments with an id-first manifest and a machine-local library cache.
+`skillspm` manages declarative Skills environments with a minimal project manifest and a machine-local library cache.
 
-## 0.3.0 Phase 2 model
+## 0.3.0 model
 
 Project truth lives in:
 
 - `skills.yaml`
 - `skills.lock`
 
-Machine-local cache lives in:
+Machine-local state lives in:
 
 - `~/.skillspm/library.yaml`
 - `~/.skillspm/skills/`
 
-`skills.yaml` keeps only root `skills` and `targets`.
+`skills.yaml` is intentionally minimal: it keeps only `skills` and optional `targets`.
 
-`skills.lock` keeps only exact resolved skill versions.
+`skills.lock` records the exact resolved versions under its `skills` map.
 
-The library cache is not environment truth. It is a local materialization store used by `install`, `pack`, and `sync`.
+The machine-local library is not project truth. It is the local materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
 ## Manifest
 
 ```yaml
-schema: skills/v2
 skills:
   - id: local/example
-    path: ./skills/example
+    version: 0.1.0
   - id: github:owner/repo/skill
+    version: ^1.2.0
 targets:
   - type: openclaw
   - type: generic
@@ -43,20 +43,59 @@ skills:
   github:owner/repo/skill: 1.2.3
 ```
 
-## Commands
+## Public commands
 
-Public help centers on:
-
-- `skillspm add`
-- `skillspm install`
-- `skillspm pack`
+- `skillspm add <content>`
+- `skillspm install [input]`
+- `skillspm pack [out]`
 - `skillspm freeze`
-- `skillspm adopt`
-- `skillspm sync`
+- `skillspm adopt [source]`
+- `skillspm sync [target]`
 - `skillspm doctor`
-- `skillspm help`
+- `skillspm help [command]`
 
-## Install input precedence
+## Unified `add` entrypoint
+
+`skillspm add <content>` auto-detects input in this order:
+
+1. explicit local path (`./`, `../`, `/`, `file://`)
+2. existing local path from the current working directory
+3. `https://github.com/...` URL
+4. provider-prefixed or plain skill id
+
+`--provider <provider>` is a first-class user choice for non-path inputs. You can supply it proactively even when not strictly required.
+
+If you omit `--provider` and the input could reasonably match multiple providers, `skillspm add` fails and asks you to choose a provider explicitly.
+
+Examples:
+
+```bash
+skillspm add ./skills/my-skill
+skillspm add owner/repo/skill --provider github
+skillspm add https://github.com/owner/repo/tree/main/skills/my-skill
+skillspm add example/skill --provider openclaw
+skillspm add github:owner/repo/skill
+skillspm add openclaw:example/skill@^1.0.0
+```
+
+For local paths, `add` materializes the skill into `~/.skillspm/library.yaml` and `~/.skillspm/skills/`, then writes only `id` and `version` into `skills.yaml`.
+
+## `adopt` and `sync`
+
+`adopt` and `sync` use a direct target-object UX.
+
+Examples:
+
+```bash
+skillspm adopt openclaw
+skillspm adopt openclaw,codex
+skillspm sync claude_code
+skillspm sync openclaw,codex
+```
+
+`adopt` can also take a local directory path instead of a target name.
+
+## `install` input precedence
 
 `skillspm install` selects input in this order:
 
@@ -72,10 +111,23 @@ A `.skillspm.tgz` pack contains:
 
 - `skills.yaml`
 - `skills.lock`
-- `manifest.yaml` for internal validation
+- internal `manifest.yaml`
 - `skills/` with exact cached skill payloads
 
 `manifest.yaml` is internal pack metadata, not user-facing environment truth.
+
+## Doctor scope
+
+`skillspm doctor` explicitly checks:
+
+- manifest contract
+- lockfile presence and contents
+- machine-local library/cache availability
+- pack readiness
+- sync target containment and host compatibility
+- project/global manifest conflicts
+
+Use `skillspm doctor --json` for machine-readable diagnostics.
 
 ## Sync behavior
 
@@ -92,6 +144,7 @@ By default it is non-destructive:
 ```bash
 skillspm add ./skills/my-skill
 skillspm install
-skillspm sync
+skillspm doctor
+skillspm sync openclaw
 skillspm freeze
 ```

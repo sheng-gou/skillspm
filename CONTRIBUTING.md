@@ -2,7 +2,7 @@
 
 Thanks for contributing to SkillsPM.
 
-SkillsPM is a declarative Skills environment manager built around `skills.yaml` as project truth and `skills.lock` as the frozen resolved state.
+SkillsPM is a declarative Skills environment manager built around a minimal `skills.yaml` as project truth and `skills.lock` as the frozen resolved state.
 
 This project is still early. Clear bug reports, small focused pull requests, and practical feedback are especially valuable.
 
@@ -37,17 +37,19 @@ npm test
 
 When contributing, please keep these principles in mind:
 
-- `skills.yaml` and `skills.lock` define the project environment contract
+- `skills.yaml` keeps only root `skills` and optional `targets`
+- local path or source provenance belongs in machine-local state, not in project truth
+- `skills.lock` records exact resolved versions under its `skills` map
 - machine-local cache lives under `~/.skillspm/` and is not project truth
-- public command docs must stay aligned to the current Phase-2 command surface:
-  - `add`
-  - `install`
-  - `pack`
+- public command docs must stay aligned to the current command surface:
+  - `add <content>`
+  - `install [input]`
+  - `pack [out]`
   - `freeze`
-  - `adopt`
-  - `sync`
+  - `adopt [source]`
+  - `sync [target]`
   - `doctor`
-  - `help`
+  - `help [command]`
 - README wording should stay aligned with actual CLI behavior
 - agent-facing behavior should stay aligned with [AGENTS.md](AGENTS.md)
 
