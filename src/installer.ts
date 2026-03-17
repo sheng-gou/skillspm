@@ -30,7 +30,7 @@ export async function installProject(layout: ScopeLayout, options: InstallProjec
   const library = await loadLibrary(layout);
   printInfo("Caching skills...");
   for (const node of [...resolution.nodes.values()].sort((left, right) => left.id.localeCompare(right.id))) {
-    await cacheSkill(layout, library, node.id, node.version, node.installPath);
+    await cacheSkill(layout, library, node.id, node.version, node.installPath, node.source);
     printSuccess(`Cached ${node.id}@${node.version}`);
   }
 

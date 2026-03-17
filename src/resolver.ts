@@ -7,9 +7,15 @@ import { verifyLockedSkillPathIdentity } from "./lockfile";
 import { loadLockfile } from "./lockfile";
 import { loadManifest } from "./manifest";
 import { loadSkillMetadata } from "./skill";
-import { materializeProviderSource } from "./provider";
+import {
+  getPublicGitHubProjectFallbackFailureReason,
+  inferPublicGitHubLockfileSourceCandidates,
+  inferPublicGitHubProjectSourceCandidates,
+  materializeProviderSource
+} from "./provider";
 import type { LoadedPack } from "./pack";
 import type {
+  LibrarySkillSource,
   LockedSkillEntry,
   LockedSkillResolvedFrom,
   ManifestSkill,
@@ -34,10 +40,12 @@ interface ResolveContext {
 }
 
 interface MaterializedSkillResolution {
+  applicable?: boolean;
   installPath?: string;
   failureReason?: string;
   digest?: string;
   resolvedFrom?: LockedSkillResolvedFrom;
+  source?: LibrarySkillSource;
 }
 
 export interface ResolveProjectOptions {
@@ -105,6 +113,7 @@ async function resolveManifestSkill(
     version: resolvedVersion,
     digest: materialized.digest!,
     resolvedFrom: materialized.resolvedFrom!,
+    ...(materialized.source ? { source: materialized.source } : {}),
     dependencies: metadata?.dependencies ?? [],
     installPath,
     metadata,
@@ -193,17 +202,110 @@ async function resolveMaterializedSkillPath(
     sourceFailures.push(`pack entry was declared but missing at ${candidate}`);
   }
 
-  const recordedSource = await resolveRecordedSourcePath(context, skillId, version);
-  if (recordedSource.installPath) {
-    return recordedSource;
+  const recordedPathSource = await resolveRecordedPathSourcePath(context, skillId, version);
+  if (recordedPathSource.installPath) {
+    return recordedPathSource;
+  }
+  if (recordedPathSource.failureReason) {
+    sourceFailures.push(recordedPathSource.failureReason);
+  }
+
+  const lockedProviderSource = await resolveLockedProviderSourcePath(context, skillId, version);
+  if (lockedProviderSource.installPath) {
+    return lockedProviderSource;
+  }
+  if (lockedProviderSource.applicable) {
+    return {
+      failureReason: sourceFailures.length > 0
+        ? [...sourceFailures, lockedProviderSource.failureReason ?? "locked provider provenance is insufficient for public github recovery"].join("; ")
+        : lockedProviderSource.failureReason ?? "locked provider provenance is insufficient for public github recovery"
+    };
+  }
+
+  const recordedProviderSource = await resolveRecordedLibraryProviderSourcePath(context, skillId, version);
+  if (recordedProviderSource.installPath) {
+    return recordedProviderSource;
+  }
+  if (recordedProviderSource.failureReason) {
+    sourceFailures.push(recordedProviderSource.failureReason);
+  }
+
+  const recordedLibrarySource = context.library.skills[skillId]?.versions[version]?.source;
+  const projectFallbackFailure = getPublicGitHubProjectFallbackFailureReason(recordedLibrarySource);
+  if (projectFallbackFailure) {
+    return {
+      failureReason: sourceFailures.length > 0 ? sourceFailures.join("; ") : projectFallbackFailure
+    };
+  }
+
+  const projectSource = await resolvePublicGitHubProjectSourcePath(context, skillId, version);
+  if (projectSource.installPath) {
+    return projectSource;
+  }
+  if (projectSource.failureReason) {
+    sourceFailures.push(projectSource.failureReason);
   }
 
   return {
-    failureReason: [...sourceFailures, recordedSource.failureReason ?? "no reusable source provenance recorded"].join("; ")
+    failureReason: sourceFailures.length > 0 ? sourceFailures.join("; ") : "no reusable source provenance recorded"
   };
 }
 
-async function resolveRecordedSourcePath(
+async function resolveLockedProviderSourcePath(
+  context: ResolveContext,
+  skillId: string,
+  version: string
+): Promise<MaterializedSkillResolution> {
+  const lockEntry = context.lockfile?.skills[skillId];
+  const candidates = inferPublicGitHubLockfileSourceCandidates(lockEntry?.resolved_from, version);
+  if (!candidates.applicable) {
+    return {
+      applicable: false
+    };
+  }
+  if (!candidates.sources || candidates.sources.length === 0) {
+    return {
+      applicable: true,
+      failureReason: candidates.failureReason ?? "locked provider provenance is insufficient for public github recovery"
+    };
+  }
+
+  const layout = resolveScopeLayout(context.cwd);
+  const failures: string[] = [];
+  for (const source of candidates.sources) {
+    const materialized = await materializeProviderSource(layout, skillId, version, source);
+    if (!materialized.installPath) {
+      failures.push(materialized.failureReason ?? `public github recovery failed for ${source.value}`);
+      continue;
+    }
+
+    try {
+      const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Locked provider materialized content");
+      return {
+        applicable: true,
+        installPath: materialized.installPath,
+        digest,
+        resolvedFrom: {
+          type: "provider",
+          ref: source.value
+        },
+        source
+      };
+    } catch (error) {
+      await rm(materialized.installPath, { recursive: true, force: true });
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return {
+    applicable: true,
+    failureReason: failures.length > 0
+      ? failures.join("; ")
+      : candidates.failureReason ?? "locked provider provenance is insufficient for public github recovery"
+  };
+}
+
+async function resolveRecordedPathSourcePath(
   context: ResolveContext,
   skillId: string,
   version: string
@@ -216,29 +318,7 @@ async function resolveRecordedSourcePath(
   }
 
   if (source.kind === "provider") {
-    const layout = resolveScopeLayout(context.cwd);
-    const materialized = await materializeProviderSource(layout, skillId, version, source);
-    if (!materialized.installPath) {
-      return {
-        failureReason: materialized.failureReason
-      };
-    }
-
-    try {
-      const lockEntry = context.lockfile?.skills[skillId];
-      const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Recorded provider materialized content");
-      return {
-        installPath: materialized.installPath,
-        digest,
-        resolvedFrom: {
-          type: "provider",
-          ref: source.value
-        }
-      };
-    } catch (error) {
-      await rm(materialized.installPath, { recursive: true, force: true });
-      throw error;
-    }
+    return {};
   }
 
   if (!(await exists(source.value))) {
@@ -269,7 +349,93 @@ async function resolveRecordedSourcePath(
     resolvedFrom: {
       type: source.kind,
       ref: source.value
+    },
+    source
+  };
+}
+
+async function resolveRecordedLibraryProviderSourcePath(
+  context: ResolveContext,
+  skillId: string,
+  version: string
+): Promise<MaterializedSkillResolution> {
+  const source = context.library.skills[skillId]?.versions[version]?.source;
+  if (!source || source.kind !== "provider") {
+    return {};
+  }
+
+  const layout = resolveScopeLayout(context.cwd);
+  const materialized = await materializeProviderSource(layout, skillId, version, source);
+  if (!materialized.installPath) {
+    return {
+      failureReason: materialized.failureReason
+    };
+  }
+
+  try {
+    const lockEntry = context.lockfile?.skills[skillId];
+    const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Recorded provider materialized content");
+    return {
+      installPath: materialized.installPath,
+      digest,
+      resolvedFrom: {
+        type: "provider",
+        ref: source.value
+      },
+      source
+    };
+  } catch (error) {
+    await rm(materialized.installPath, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function resolvePublicGitHubProjectSourcePath(
+  context: ResolveContext,
+  skillId: string,
+  version: string
+): Promise<MaterializedSkillResolution> {
+  const candidates = inferPublicGitHubProjectSourceCandidates(skillId, version);
+  if (!candidates.applicable) {
+    return {};
+  }
+  if (!candidates.sources || candidates.sources.length === 0) {
+    return {
+      failureReason: candidates.failureReason ?? "persisted project semantics are insufficient for public github recovery"
+    };
+  }
+
+  const layout = resolveScopeLayout(context.cwd);
+  const lockEntry = context.lockfile?.skills[skillId];
+  const failures: string[] = [];
+  for (const source of candidates.sources) {
+    const materialized = await materializeProviderSource(layout, skillId, version, source);
+    if (!materialized.installPath) {
+      failures.push(materialized.failureReason ?? `public github recovery failed for ${source.value}`);
+      continue;
     }
+
+    try {
+      const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Public github materialized content");
+      return {
+        installPath: materialized.installPath,
+        digest,
+        resolvedFrom: {
+          type: "provider",
+          ref: source.value
+        },
+        source
+      };
+    } catch (error) {
+      await rm(materialized.installPath, { recursive: true, force: true });
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return {
+    failureReason: failures.length > 0
+      ? failures.join("; ")
+      : candidates.failureReason ?? "persisted project semantics are insufficient for public github recovery"
   };
 }
 

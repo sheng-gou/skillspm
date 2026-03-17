@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { ScopeLayout } from "./scope";
-import type { LibrarySkillSource } from "./types";
+import type { LibrarySkillSource, LockedSkillResolvedFrom } from "./types";
 import {
   assertNoSymlinksInTree,
   assertPathWithinRootReal,
@@ -22,6 +22,12 @@ const PROVIDER_RECOVERY_GIT_CONFIG = ["-c", "credential.helper=", "-c", "core.as
 
 export interface ProviderMaterializationResult {
   installPath?: string;
+  failureReason?: string;
+}
+
+export interface PublicGitHubSourceCandidates {
+  applicable: boolean;
+  sources?: LibrarySkillSource[];
   failureReason?: string;
 }
 
@@ -89,6 +95,66 @@ export async function materializeProviderSource(
   }
 }
 
+export function inferPublicGitHubLockfileSourceCandidates(
+  resolvedFrom: LockedSkillResolvedFrom | undefined,
+  version: string
+): PublicGitHubSourceCandidates {
+  if (!resolvedFrom || resolvedFrom.type !== "provider") {
+    return {
+      applicable: false
+    };
+  }
+
+  if (!parseGitHubSourceValue(resolvedFrom.ref)) {
+    return {
+      applicable: true,
+      failureReason:
+        "locked provider provenance is insufficient for public github recovery: expected resolved_from.ref to be either a canonical github:owner/repo[/path] id or an anonymous public https://github.com/owner/repo[/path] locator"
+    };
+  }
+
+  return buildPublicGitHubSourceCandidates(
+    resolvedFrom.ref,
+    version,
+    `locked provider provenance is insufficient for public github recovery: ${resolvedFrom.ref} is unversioned, so no exact public ref can be inferred`
+  );
+}
+
+export function inferPublicGitHubProjectSourceCandidates(skillId: string, version: string): PublicGitHubSourceCandidates {
+  const parsed = parseGitHubSkillId(skillId);
+  if (!parsed) {
+    return {
+      applicable: false
+    };
+  }
+
+  return buildPublicGitHubSourceCandidates(
+    skillId,
+    version,
+    `persisted project semantics are insufficient for public github recovery: ${skillId} is unversioned, so no exact public ref can be inferred`
+  );
+}
+
+export function getPublicGitHubProjectFallbackFailureReason(source: LibrarySkillSource | undefined): string | undefined {
+  if (!source || source.kind !== "provider" || !source.provider) {
+    return undefined;
+  }
+
+  if (source.provider.name !== "github") {
+    return `recorded provider source is insufficient for re-materialization: only public github provider provenance is supported, received ${source.provider.name}`;
+  }
+
+  if (source.provider.visibility !== undefined && source.provider.visibility !== "public") {
+    return "recorded provider source is insufficient for re-materialization: github recovery only supports source.provider.visibility=public";
+  }
+
+  if (!parseGitHubSourceValue(source.value)) {
+    return "recorded provider source is insufficient for re-materialization: expected source.value to be either a canonical github:owner/repo[/path] id or an anonymous public https://github.com/owner/repo[/path] locator";
+  }
+
+  return undefined;
+}
+
 function parseGitHubProviderSource(source: LibrarySkillSource):
   | { ok: true; parsed: ParsedGitHubSkillId; ref: string }
   | { ok: false; failureReason: string } {
@@ -130,12 +196,12 @@ function parseGitHubProviderSource(source: LibrarySkillSource):
     };
   }
 
-  const parsed = parseGitHubSkillId(source.value);
+  const parsed = parseGitHubSourceValue(source.value);
   if (!parsed) {
     return {
       ok: false,
       failureReason:
-        `recorded provider source is insufficient for re-materialization: expected source.value to be a canonical github:owner/repo[/path] id, received ${source.value}`
+        "recorded provider source is insufficient for re-materialization: expected source.value to be either a canonical github:owner/repo[/path] id or an anonymous public https://github.com/owner/repo[/path] locator"
     };
   }
 
@@ -144,6 +210,37 @@ function parseGitHubProviderSource(source: LibrarySkillSource):
     parsed,
     ref: source.provider.ref
   };
+}
+
+function buildPublicGitHubSourceCandidates(
+  sourceValue: string,
+  version: string,
+  unversionedFailureReason: string
+): PublicGitHubSourceCandidates {
+  if (version === "unversioned") {
+    return {
+      applicable: true,
+      failureReason: unversionedFailureReason
+    };
+  }
+
+  const refs = [...new Set([`refs/tags/v${version}`, `refs/tags/${version}`])];
+  return {
+    applicable: true,
+    sources: refs.map((ref) => ({
+      kind: "provider",
+      value: sourceValue,
+      provider: {
+        name: "github",
+        ref,
+        visibility: "public"
+      }
+    }))
+  };
+}
+
+function parseGitHubSourceValue(value: string): ParsedGitHubSkillId | undefined {
+  return parseGitHubSkillId(value) ?? parseGitHubUrl(value);
 }
 
 function parseGitHubSkillId(value: string): ParsedGitHubSkillId | undefined {
@@ -163,6 +260,48 @@ function parseGitHubSkillId(value: string): ParsedGitHubSkillId | undefined {
     owner,
     repo,
     ...(skillPath ? { skillPath } : {})
+  };
+}
+
+function parseGitHubUrl(value: string): ParsedGitHubSkillId | undefined {
+  if (!value.startsWith("https://github.com/")) {
+    return undefined;
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(value);
+  } catch {
+    return undefined;
+  }
+
+  if (parsedUrl.username || parsedUrl.password) {
+    return undefined;
+  }
+
+  if (parsedUrl.search || parsedUrl.hash) {
+    return undefined;
+  }
+
+  const segments = parsedUrl.pathname.split("/").filter(Boolean);
+  if (segments.length < 2) {
+    return undefined;
+  }
+
+  const owner = segments[0];
+  const repo = segments[1].replace(/\.git$/u, "");
+  let skillPath: string[] = [];
+
+  if ((segments[2] === "tree" || segments[2] === "blob") && segments.length >= 5) {
+    skillPath = segments.slice(4);
+  } else if (segments.length > 2) {
+    skillPath = segments.slice(2);
+  }
+
+  return {
+    owner,
+    repo,
+    ...(skillPath.length > 0 ? { skillPath: skillPath.join("/") } : {})
   };
 }
 
@@ -213,5 +352,5 @@ async function runGit(args: string[]): Promise<void> {
 
 function buildGitHubFetchFailureReason(sourceValue: string, ref: string, error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
-  return `public github fetch failed for ${sourceValue} at ${ref}: ${detail}. Direct provider recovery only supports unauthenticated access to public GitHub repos in this build`;
+  return `public github fetch failed for ${sourceValue} at ${ref}: ${detail}. Public github recovery only supports unauthenticated access to public GitHub repos in this build`;
 }

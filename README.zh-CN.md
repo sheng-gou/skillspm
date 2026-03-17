@@ -20,11 +20,11 @@
 
 机器本地 library 不是项目真相，而是 `install`、`pack`、`adopt`、`sync` 使用的本地缓存/物化层。
 
-`skillspm install` 会先读取 `skills.yaml`，在存在时参考 `skills.lock`，检查机器本地 library 中是否存在精确内容匹配；只有在 cache miss 时才回退到 pack 内容或已记录的本地/target source。若 `~/.skillspm/library.yaml` 里记录了足够的机器本地 provider provenance，也可以对公共 GitHub provider source 重新物化，但只允许走未认证访问，并且要求恢复出来的 skill root 完全不含 symlink。若内容摘要不匹配，会 fail closed，而不是静默接受漂移。
+`skillspm install` 会先读取 `skills.yaml`，在存在时参考 `skills.lock`，检查机器本地 library 中是否存在精确内容匹配；只有在 cache miss 时才回退到 pack 内容或已记录的本地/target source。对于 `skills.lock` 里 `resolved_from.type=provider` 且 `resolved_from.ref` 是规范 `github:` locator 或匿名公共 `https://github.com/...` locator 的条目，即使在干净机器上也可以按收窄规则重新物化公共 GitHub source；如果 `~/.skillspm/library.yaml` 里还记录了足够的机器本地 provider provenance，则仍可优先使用其中的精确 ref。带精确版本的规范公共 `github:` skill 仍然可以通过未认证的公共 tag 抓取恢复。恢复出来的 provider skill root 必须完全不含 symlink。若内容摘要不匹配，会 fail closed，而不是静默接受漂移。
 
-这个分支里的 provider 恢复能力被刻意收窄：只有已经记录了精确 ref 的公共 `github:` source 才能重新抓取。恢复路径会禁用 credential helper、askpass hook 和终端交互，因此任何私有/需要认证的 GitHub 访问都会诚实地 fail closed。plain git URL、语义不充分的 provider id，以及私有/需要认证的 GitHub 流程仍然必须依赖现有 cache 或 pack。
+这个分支里的 provider 恢复能力被刻意收窄：干净机器上的 lockfile 回退只覆盖 `resolved_from.type=provider` 且 locator 为规范公共 `github:` id 或匿名公共 `https://github.com/...` URL 的条目，而且只允许未认证访问。带精确版本的 install 可以从该 lockfile locator 或项目里的规范 id 推导常见公共 tag ref；若机器本地 provider provenance 已记录，也可以继续为同一类公共 GitHub locator 提供精确 ref。恢复路径会禁用 credential helper、askpass hook 和终端交互，因此任何私有/需要认证的 GitHub 访问都会诚实地 fail closed。非 GitHub provider、非 public 可见性、unversioned GitHub install，以及其他 plain git 输入仍然必须依赖现有 cache 或 pack。
 
-当机器本地 provider 记录已经足够支持恢复时，`~/.skillspm/library.yaml` 中会类似这样：
+当机器本地 provider 记录可用时，`~/.skillspm/library.yaml` 仍然可以保存恢复所用的精确 ref，格式类似：
 
 ```yaml
 source:
@@ -35,6 +35,8 @@ source:
     ref: refs/tags/v1.2.3
     visibility: public
 ```
+
+已记录的公共 GitHub provider provenance 也可以把 `source.value` 写成匿名公共 GitHub URL，例如 `https://github.com/owner/repo/tree/main/skills/demo`。但 `provider.ref` 仍然必须是精确 ref，并且不支持 URL 内嵌凭据。
 
 `skillspm pack` 是面向私有、本地、离线和跨机器恢复场景的补充机制，不会改变 source model，也不会取代 `skills.yaml` / `skills.lock` 作为项目真相。
 
@@ -140,9 +142,11 @@ skillspm sync openclaw,codex
 3. 命中精确内容时复用机器本地 library
 4. cache miss 时回退到 pack 内容
 5. pack miss 时回退到已记录的本地/target source 路径
-6. 如果 `library.yaml` 中记录了带精确 ref provenance 的公共 `github:` source，则只通过未认证的公共 GitHub 访问重新物化到本地 cache
-7. 如果恢复出的 provider skill root 下任意位置存在 symlink，则直接拒绝恢复
-8. 若 digest 不匹配，则 fail closed，而不是静默接受漂移
+6. 如果 `skills.lock` 记录了 `resolved_from.type=provider`，且 locator 是规范公共 `github:` id 或匿名公共 `https://github.com/...` locator，则先尝试该 lockfile 驱动的公共 GitHub 恢复
+7. 否则，如果 `library.yaml` 记录了精确的公共 GitHub provider provenance，则在 cache miss 时优先使用该精确 ref；这里的 source 可以是规范 `github:` id，也可以是匿名公共 `https://github.com/...` locator
+8. 否则，如果 skill id 是规范公共 `github:` id 且解析出的版本是精确值，则尝试通过未认证公共 tag 恢复（先试 `refs/tags/v<version>`，再试 `refs/tags/<version>`）
+9. 如果恢复出的 provider skill root 下任意位置存在 symlink，则直接拒绝恢复
+10. 若 digest 不匹配，则 fail closed，而不是静默接受漂移
 
 ## Pack 结构
 

@@ -20,11 +20,11 @@ Machine-local state lives in:
 
 The machine-local library is not project truth. It is the local cache/materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
-`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded local/target sources on cache miss. Recorded public GitHub provider sources can also re-materialize on cache miss when `~/.skillspm/library.yaml` contains sufficient machine-local provider provenance, but only through unauthenticated access and only when the recovered skill root is symlink-free. Digest mismatches fail closed instead of silently accepting drift.
+`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded local/target sources on cache miss. Clean machines can also re-materialize narrow public GitHub provider sources from `skills.lock` when `resolved_from.type=provider` and `resolved_from.ref` is either a canonical `github:` locator or an anonymous public `https://github.com/...` locator, while recorded library provider provenance can still supply an exact ref when available. Canonical public `github:` skills with exact versions remain recoverable through unauthenticated public tag fetches. Recovered provider skill roots must be symlink-free. Digest mismatches fail closed instead of silently accepting drift.
 
-Provider recovery is intentionally narrow in this branch: only recorded public `github:` sources with an exact persisted ref are re-fetchable. The recovery path disables credential helpers, askpass hooks, and terminal prompting so private/authenticated GitHub access fails closed honestly. Plain git URLs, vague provider ids, and private/authenticated GitHub flows still require an existing cache entry or a pack.
+Provider recovery is intentionally narrow in this branch: clean-machine lockfile fallback only covers `resolved_from.type=provider` entries whose locator is a canonical public `github:` id or an anonymous public `https://github.com/...` URL, and only through unauthenticated access. Exact-version installs can infer conventional public tag refs from either that lockfile locator or the canonical project id, while recorded machine-local provider provenance can still supply an exact ref for the same public GitHub cases. The recovery path disables credential helpers, askpass hooks, and terminal prompting so private/authenticated GitHub access fails closed honestly. Non-GitHub providers, non-public visibility, unversioned GitHub installs, and other plain git inputs still require an existing cache entry or a pack.
 
-When a machine-local provider entry is sufficient for recovery, it looks like this in `~/.skillspm/library.yaml`:
+When a machine-local provider entry is available, it can still record the exact ref used for recovery in `~/.skillspm/library.yaml`:
 
 ```yaml
 source:
@@ -35,6 +35,8 @@ source:
     ref: refs/tags/v1.2.3
     visibility: public
 ```
+
+Recorded public GitHub provider provenance may also use an anonymous public GitHub URL as `source.value`, for example `https://github.com/owner/repo/tree/main/skills/demo`. Exact `provider.ref` is still required, and URL-embedded credentials are not supported.
 
 `skillspm pack` is a transport and recovery supplement for private, local, offline, or cross-machine workflows. It does not redefine the source model or replace `skills.yaml`/`skills.lock` as project truth.
 
@@ -140,9 +142,11 @@ After choosing the input, `install` processes each skill in this order:
 3. reuse the machine-local library on exact content match
 4. on cache miss, fall back to pack contents
 5. on pack miss, fall back to recorded local/target source paths
-6. if `library.yaml` recorded a public `github:` source with exact ref provenance, re-materialize it into the local cache through unauthenticated public GitHub access only
-7. reject the recovery if any symlink exists anywhere under the recovered provider skill root
-8. fail closed on digest mismatch instead of silently accepting drift
+6. if `skills.lock` recorded `resolved_from.type=provider` with a canonical public `github:` id or anonymous public `https://github.com/...` locator, try that lockfile-backed public GitHub recovery first
+7. otherwise, if `library.yaml` recorded exact public GitHub provider provenance, use that exact ref on cache miss for either a canonical `github:` id or an anonymous public `https://github.com/...` locator
+8. otherwise, if the skill id is a canonical public `github:` id and the resolved version is exact, try unauthenticated public tag recovery (`refs/tags/v<version>` then `refs/tags/<version>`)
+9. reject the recovery if any symlink exists anywhere under the recovered provider skill root
+10. fail closed on digest mismatch instead of silently accepting drift
 
 ## Pack format
 

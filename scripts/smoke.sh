@@ -79,6 +79,13 @@ EOF_SKILL
   grep -Fq "Ambiguous add input" "$TMPDIR/add-ambiguous.err"
   grep -Fq -- "--provider <provider>" "$TMPDIR/add-ambiguous.err"
 
+  set +e
+  "${CLI[@]}" add "https://github.com/example/tools/tree/main/skills/url-demo?token=secret" > "$TMPDIR/add-github-query.out" 2> "$TMPDIR/add-github-query.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+  grep -Fq "Public GitHub locators must be anonymous and must not include query strings or fragments" "$TMPDIR/add-github-query.err"
+
   "${CLI[@]}" add ./local-skill
   "${CLI[@]}" add owner/repo/skills/demo@^2.0.0 --provider github
   "${CLI[@]}" add https://github.com/example/tools/tree/main/skills/url-demo
@@ -323,10 +330,28 @@ grep -Fq "failed closed: digest mismatch" "$TMPDIR/digest-fail.err"
 grep -Fq "digest/example@4.5.6" "$TMPDIR/digest-fail.err"
 
 PROVIDER_FAIL_HOME="$TMPDIR/provider-fail-home"
+PROVIDER_CLEAN_HOME="$TMPDIR/provider-clean-home"
+PROVIDER_CLEAN_PROJECT="$TMPDIR/provider-clean-project"
 PROVIDER_FIXTURE_ROOT="$TMPDIR/provider-github"
 PROVIDER_WORKTREE="$TMPDIR/provider-worktree"
 PROVIDER_REFRESH_PROJECT="$TMPDIR/provider-refresh-project"
-mkdir -p "$PROVIDER_FAIL_HOME/.skillspm" "$PROVIDER_FIXTURE_ROOT/example" "$PROVIDER_WORKTREE" "$PROVIDER_REFRESH_PROJECT"
+PROVIDER_CRED_URL_HOME="$TMPDIR/provider-credential-url-home"
+PROVIDER_CRED_URL_PROJECT="$TMPDIR/provider-credential-url-project"
+PROVIDER_URL_HOME="$TMPDIR/provider-url-home"
+PROVIDER_URL_PROJECT="$TMPDIR/provider-url-project"
+PROVIDER_LOCK_HOME="$TMPDIR/provider-lock-home"
+PROVIDER_LOCK_PROJECT="$TMPDIR/provider-lock-project"
+PROVIDER_LOCK_PRIORITY_HOME="$TMPDIR/provider-lock-priority-home"
+PROVIDER_LOCK_PRIORITY_PROJECT="$TMPDIR/provider-lock-priority-project"
+PROVIDER_LOCK_CRED_HOME="$TMPDIR/provider-lock-credential-home"
+PROVIDER_LOCK_CRED_PROJECT="$TMPDIR/provider-lock-credential-project"
+PROVIDER_QUERY_HOME="$TMPDIR/provider-query-home"
+PROVIDER_QUERY_PROJECT="$TMPDIR/provider-query-project"
+PROVIDER_LOCK_QUERY_HOME="$TMPDIR/provider-lock-query-home"
+PROVIDER_LOCK_QUERY_PROJECT="$TMPDIR/provider-lock-query-project"
+PROVIDER_FRAGMENT_HOME="$TMPDIR/provider-fragment-home"
+PROVIDER_FRAGMENT_PROJECT="$TMPDIR/provider-fragment-project"
+mkdir -p "$PROVIDER_FAIL_HOME/.skillspm" "$PROVIDER_CLEAN_HOME/.skillspm" "$PROVIDER_CLEAN_PROJECT" "$PROVIDER_FIXTURE_ROOT/example" "$PROVIDER_WORKTREE" "$PROVIDER_REFRESH_PROJECT" "$PROVIDER_CRED_URL_HOME/.skillspm" "$PROVIDER_CRED_URL_PROJECT" "$PROVIDER_URL_HOME/.skillspm" "$PROVIDER_URL_PROJECT" "$PROVIDER_LOCK_HOME/.skillspm" "$PROVIDER_LOCK_PROJECT" "$PROVIDER_LOCK_PRIORITY_HOME/.skillspm" "$PROVIDER_LOCK_PRIORITY_PROJECT" "$PROVIDER_LOCK_CRED_HOME/.skillspm" "$PROVIDER_LOCK_CRED_PROJECT" "$PROVIDER_QUERY_HOME/.skillspm" "$PROVIDER_QUERY_PROJECT" "$PROVIDER_LOCK_QUERY_HOME/.skillspm" "$PROVIDER_LOCK_QUERY_PROJECT" "$PROVIDER_FRAGMENT_HOME/.skillspm" "$PROVIDER_FRAGMENT_PROJECT"
 
 git init --bare "$PROVIDER_FIXTURE_ROOT/example/public-skill.git" > /dev/null
 git init "$PROVIDER_WORKTREE" > /dev/null
@@ -367,6 +392,19 @@ printf 'provider-v2\n' > "$PROVIDER_WORKTREE/skills/provider-demo/materializatio
   git tag v2.0.0
   git push origin main --tags > /dev/null
 )
+
+cat > "$PROVIDER_CLEAN_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+(
+  cd "$PROVIDER_CLEAN_PROJECT"
+  HOME="$PROVIDER_CLEAN_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+)
+assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return manifest.skills.length === 1 && manifest.skills[0].id === 'github:example/public-skill/skills/provider-demo' && manifest.skills[0].version === '2.0.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/public-skill/skills/provider-demo';" "$PROVIDER_CLEAN_PROJECT/skills.yaml" "$PROVIDER_CLEAN_PROJECT/skills.lock"
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_CLEAN_HOME/.skillspm/library.yaml"
+grep -Fxq "provider-v2" "$PROVIDER_CLEAN_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0/materialization.txt"
 
 cat > "$PROVIDER_REFRESH_PROJECT/skills.yaml" <<'YAML'
 skills:
@@ -410,6 +448,283 @@ NODE
 assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return manifest.skills.length === 1 && manifest.skills[0].id === 'github:example/public-skill/skills/provider-demo' && manifest.skills[0].version === '2.0.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/public-skill/skills/provider-demo';" "$PROVIDER_REFRESH_PROJECT/skills.yaml" "$PROVIDER_REFRESH_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_FAIL_HOME/.skillspm/library.yaml"
 grep -Fxq "provider-v2" "$PROVIDER_FAIL_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0/materialization.txt"
+
+cat > "$PROVIDER_URL_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+cat > "$PROVIDER_URL_HOME/.skillspm/library.yaml" <<'YAML'
+schema: skills-library/v1
+skills:
+  "github:example/public-skill/skills/provider-demo":
+    versions:
+      2.0.0:
+        path: /tmp/missing-provider-cache
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: https://github.com/example/public-skill/tree/main/skills/provider-demo
+          provider:
+            name: github
+            ref: refs/tags/v2.0.0
+            visibility: public
+YAML
+(
+  cd "$PROVIDER_URL_PROJECT"
+  HOME="$PROVIDER_URL_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+)
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'https://github.com/example/public-skill/tree/main/skills/provider-demo';" "$PROVIDER_URL_PROJECT/skills.lock"
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'https://github.com/example/public-skill/tree/main/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_URL_HOME/.skillspm/library.yaml"
+grep -Fxq "provider-v2" "$PROVIDER_URL_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0/materialization.txt"
+
+cat > "$PROVIDER_LOCK_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+cp "$PROVIDER_URL_PROJECT/skills.lock" "$PROVIDER_LOCK_PROJECT/skills.lock"
+(
+  cd "$PROVIDER_LOCK_PROJECT"
+  HOME="$PROVIDER_LOCK_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+)
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'https://github.com/example/public-skill/tree/main/skills/provider-demo';" "$PROVIDER_LOCK_PROJECT/skills.lock"
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'https://github.com/example/public-skill/tree/main/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_LOCK_HOME/.skillspm/library.yaml"
+grep -Fxq "provider-v2" "$PROVIDER_LOCK_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0/materialization.txt"
+
+cat > "$PROVIDER_LOCK_PRIORITY_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+cp "$PROVIDER_URL_PROJECT/skills.lock" "$PROVIDER_LOCK_PRIORITY_PROJECT/skills.lock"
+cat > "$PROVIDER_LOCK_PRIORITY_HOME/.skillspm/library.yaml" <<'YAML'
+schema: skills-library/v1
+skills:
+  "github:example/public-skill/skills/provider-demo":
+    versions:
+      2.0.0:
+        path: /tmp/missing-provider-cache
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: github:example/public-skill/skills/provider-demo
+          provider:
+            name: github
+            ref: refs/tags/v2.0.0
+            visibility: public
+YAML
+(
+  cd "$PROVIDER_LOCK_PRIORITY_PROJECT"
+  HOME="$PROVIDER_LOCK_PRIORITY_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+)
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'https://github.com/example/public-skill/tree/main/skills/provider-demo';" "$PROVIDER_LOCK_PRIORITY_PROJECT/skills.lock"
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'https://github.com/example/public-skill/tree/main/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_LOCK_PRIORITY_HOME/.skillspm/library.yaml"
+grep -Fxq "provider-v2" "$PROVIDER_LOCK_PRIORITY_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0/materialization.txt"
+
+PROVIDER_CRED_URL_HELPER_LOG="$TMPDIR/provider-credential-url-helper.log"
+PROVIDER_CRED_URL_ASKPASS_LOG="$TMPDIR/provider-credential-url-askpass.log"
+PROVIDER_CRED_URL_HELPER="$TMPDIR/provider-credential-url-helper.sh"
+PROVIDER_CRED_URL_ASKPASS="$TMPDIR/provider-credential-url-askpass.sh"
+PROVIDER_CRED_URL_USER="provider-user"
+PROVIDER_CRED_URL_TOKEN="provider-token"
+
+cat > "$PROVIDER_CRED_URL_HELPER" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\${1:-}" >> "$PROVIDER_CRED_URL_HELPER_LOG"
+cat > /dev/null
+if [ "\${1:-}" = get ]; then
+  printf 'username=%s\n' "$PROVIDER_CRED_URL_USER"
+  printf 'password=%s\n' "$PROVIDER_CRED_URL_TOKEN"
+fi
+EOF
+chmod +x "$PROVIDER_CRED_URL_HELPER"
+
+cat > "$PROVIDER_CRED_URL_ASKPASS" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\${1:-}" >> "$PROVIDER_CRED_URL_ASKPASS_LOG"
+case "\${1:-}" in
+  Username*) printf '%s\n' "$PROVIDER_CRED_URL_USER" ;;
+  Password*) printf '%s\n' "$PROVIDER_CRED_URL_TOKEN" ;;
+  *) printf '\n' ;;
+esac
+EOF
+chmod +x "$PROVIDER_CRED_URL_ASKPASS"
+
+cat > "$PROVIDER_CRED_URL_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+cat > "$PROVIDER_CRED_URL_HOME/.skillspm/library.yaml" <<YAML
+schema: skills-library/v1
+skills:
+  "github:example/public-skill/skills/provider-demo":
+    versions:
+      2.0.0:
+        path: /tmp/missing-provider-cache
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: "https://$PROVIDER_CRED_URL_USER:$PROVIDER_CRED_URL_TOKEN@github.com/example/public-skill/tree/main/skills/provider-demo"
+          provider:
+            name: github
+            ref: refs/tags/v2.0.0
+            visibility: public
+YAML
+(
+  cd "$PROVIDER_CRED_URL_PROJECT"
+  set +e
+  HOME="$PROVIDER_CRED_URL_HOME" \
+  SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
+  GIT_CONFIG_COUNT=2 \
+  GIT_CONFIG_KEY_0=credential.helper \
+  GIT_CONFIG_VALUE_0="!$PROVIDER_CRED_URL_HELPER" \
+  GIT_CONFIG_KEY_1=core.askPass \
+  GIT_CONFIG_VALUE_1="$PROVIDER_CRED_URL_ASKPASS" \
+  GIT_ASKPASS="$PROVIDER_CRED_URL_ASKPASS" \
+  "${CLI[@]}" install > "$TMPDIR/provider-credential-url.out" 2> "$TMPDIR/provider-credential-url.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "recorded provider source is insufficient for re-materialization: expected source.value to be either a canonical github:owner/repo[/path] id or an anonymous public https://github.com/owner/repo[/path] locator" "$TMPDIR/provider-credential-url.err"
+[ ! -d "$PROVIDER_CRED_URL_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+[ ! -s "$PROVIDER_CRED_URL_HELPER_LOG" ]
+[ ! -s "$PROVIDER_CRED_URL_ASKPASS_LOG" ]
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'https://$PROVIDER_CRED_URL_USER:$PROVIDER_CRED_URL_TOKEN@github.com/example/public-skill/tree/main/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_CRED_URL_HOME/.skillspm/library.yaml"
+
+cat > "$PROVIDER_LOCK_CRED_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+node --input-type=module - "$PROVIDER_URL_PROJECT/skills.lock" "$PROVIDER_LOCK_CRED_PROJECT/skills.lock" "$PROVIDER_CRED_URL_USER" "$PROVIDER_CRED_URL_TOKEN" <<'NODE'
+import fs from 'node:fs';
+import * as YAML from 'yaml';
+
+const [inFile, outFile, user, token] = process.argv.slice(2);
+const doc = YAML.parse(fs.readFileSync(inFile, 'utf8'));
+doc.skills['github:example/public-skill/skills/provider-demo'].resolved_from.ref =
+  `https://${user}:${token}@github.com/example/public-skill/tree/main/skills/provider-demo`;
+fs.writeFileSync(outFile, YAML.stringify(doc, { defaultKeyType: 'QUOTE_DOUBLE' }), 'utf8');
+NODE
+(
+  cd "$PROVIDER_LOCK_CRED_PROJECT"
+  set +e
+  HOME="$PROVIDER_LOCK_CRED_HOME" \
+  SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
+  GIT_CONFIG_COUNT=2 \
+  GIT_CONFIG_KEY_0=credential.helper \
+  GIT_CONFIG_VALUE_0="!$PROVIDER_CRED_URL_HELPER" \
+  GIT_CONFIG_KEY_1=core.askPass \
+  GIT_CONFIG_VALUE_1="$PROVIDER_CRED_URL_ASKPASS" \
+  GIT_ASKPASS="$PROVIDER_CRED_URL_ASKPASS" \
+  "${CLI[@]}" install > "$TMPDIR/provider-lock-credential-url.out" 2> "$TMPDIR/provider-lock-credential-url.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "locked provider provenance is insufficient for public github recovery: expected resolved_from.ref to be either a canonical github:owner/repo[/path] id or an anonymous public https://github.com/owner/repo[/path] locator" "$TMPDIR/provider-lock-credential-url.err"
+[ ! -d "$PROVIDER_LOCK_CRED_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+[ ! -s "$PROVIDER_CRED_URL_HELPER_LOG" ]
+[ ! -s "$PROVIDER_CRED_URL_ASKPASS_LOG" ]
+
+cat > "$PROVIDER_QUERY_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+cat > "$PROVIDER_QUERY_HOME/.skillspm/library.yaml" <<'YAML'
+schema: skills-library/v1
+skills:
+  "github:example/public-skill/skills/provider-demo":
+    versions:
+      2.0.0:
+        path: /tmp/missing-provider-cache
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: "https://github.com/example/public-skill/tree/main/skills/provider-demo?token=provider-token"
+          provider:
+            name: github
+            ref: refs/tags/v2.0.0
+            visibility: public
+YAML
+(
+  cd "$PROVIDER_QUERY_PROJECT"
+  set +e
+  HOME="$PROVIDER_QUERY_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-query.out" 2> "$TMPDIR/provider-query.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "recorded provider source is insufficient for re-materialization: expected source.value to be either a canonical github:owner/repo[/path] id or an anonymous public https://github.com/owner/repo[/path] locator" "$TMPDIR/provider-query.err"
+[ ! -d "$PROVIDER_QUERY_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+[ ! -f "$PROVIDER_QUERY_PROJECT/skills.lock" ]
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'https://github.com/example/public-skill/tree/main/skills/provider-demo?token=provider-token' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_QUERY_HOME/.skillspm/library.yaml"
+
+cat > "$PROVIDER_LOCK_QUERY_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+node --input-type=module - "$PROVIDER_URL_PROJECT/skills.lock" "$PROVIDER_LOCK_QUERY_PROJECT/skills.lock" <<'NODE'
+import fs from 'node:fs';
+import * as YAML from 'yaml';
+
+const [inFile, outFile] = process.argv.slice(2);
+const doc = YAML.parse(fs.readFileSync(inFile, 'utf8'));
+doc.skills['github:example/public-skill/skills/provider-demo'].resolved_from.ref =
+  'https://github.com/example/public-skill/tree/main/skills/provider-demo?token=provider-token';
+fs.writeFileSync(outFile, YAML.stringify(doc, { defaultKeyType: 'QUOTE_DOUBLE' }), 'utf8');
+NODE
+(
+  cd "$PROVIDER_LOCK_QUERY_PROJECT"
+  set +e
+  HOME="$PROVIDER_LOCK_QUERY_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-lock-query.out" 2> "$TMPDIR/provider-lock-query.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "locked provider provenance is insufficient for public github recovery: expected resolved_from.ref to be either a canonical github:owner/repo[/path] id or an anonymous public https://github.com/owner/repo[/path] locator" "$TMPDIR/provider-lock-query.err"
+[ ! -d "$PROVIDER_LOCK_QUERY_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+[ ! -f "$PROVIDER_LOCK_QUERY_HOME/.skillspm/library.yaml" ]
+assert_node "const [lockfile] = docs; return lockfile.skills['github:example/public-skill/skills/provider-demo'].resolved_from.ref === 'https://github.com/example/public-skill/tree/main/skills/provider-demo?token=provider-token';" "$PROVIDER_LOCK_QUERY_PROJECT/skills.lock"
+
+cat > "$PROVIDER_FRAGMENT_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+cat > "$PROVIDER_FRAGMENT_HOME/.skillspm/library.yaml" <<'YAML'
+schema: skills-library/v1
+skills:
+  "github:example/public-skill/skills/provider-demo":
+    versions:
+      2.0.0:
+        path: /tmp/missing-provider-cache
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: "https://github.com/example/public-skill/tree/main/skills/provider-demo#fragment"
+          provider:
+            name: github
+            ref: refs/tags/v2.0.0
+            visibility: public
+YAML
+(
+  cd "$PROVIDER_FRAGMENT_PROJECT"
+  set +e
+  HOME="$PROVIDER_FRAGMENT_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-fragment.out" 2> "$TMPDIR/provider-fragment.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "recorded provider source is insufficient for re-materialization: expected source.value to be either a canonical github:owner/repo[/path] id or an anonymous public https://github.com/owner/repo[/path] locator" "$TMPDIR/provider-fragment.err"
+[ ! -d "$PROVIDER_FRAGMENT_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+[ ! -f "$PROVIDER_FRAGMENT_PROJECT/skills.lock" ]
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'https://github.com/example/public-skill/tree/main/skills/provider-demo#fragment' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_FRAGMENT_HOME/.skillspm/library.yaml"
 
 cat > "$PROVIDER_WORKTREE/skills/provider-demo/skill.yaml" <<'YAML'
 id: github:example/public-skill/skills/provider-demo
@@ -479,14 +794,102 @@ NODE
 
 (
   cd "$PROVIDER_INSUFFICIENT_PROJECT"
+  HOME="$PROVIDER_INSUFFICIENT_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+)
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/public-skill/skills/provider-demo';" "$PROVIDER_INSUFFICIENT_PROJECT/skills.lock"
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_INSUFFICIENT_HOME/.skillspm/library.yaml"
+grep -Fxq "provider-v2-mismatch" "$PROVIDER_INSUFFICIENT_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0/materialization.txt"
+
+PROVIDER_PRIVATE_HOME="$TMPDIR/provider-private-home"
+PROVIDER_PRIVATE_PROJECT="$TMPDIR/provider-private-project"
+mkdir -p "$PROVIDER_PRIVATE_HOME/.skillspm" "$PROVIDER_PRIVATE_PROJECT"
+cat > "$PROVIDER_PRIVATE_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+cat > "$PROVIDER_PRIVATE_HOME/.skillspm/library.yaml" <<YAML
+schema: skills-library/v1
+skills:
+  "github:example/public-skill/skills/provider-demo":
+    versions:
+      2.0.0:
+        path: $PROVIDER_PRIVATE_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: github:example/public-skill/skills/provider-demo
+          provider:
+            name: github
+            ref: refs/tags/v2.0.0
+            visibility: private
+YAML
+(
+  cd "$PROVIDER_PRIVATE_PROJECT"
   set +e
-  HOME="$PROVIDER_INSUFFICIENT_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-insufficient.out" 2> "$TMPDIR/provider-insufficient.err"
+  HOME="$PROVIDER_PRIVATE_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-private.out" 2> "$TMPDIR/provider-private.err"
   status=$?
   set -e
   test "$status" -ne 0
 )
-grep -Fq "recorded provider source is insufficient for re-materialization" "$TMPDIR/provider-insufficient.err"
-[ ! -d "$PROVIDER_INSUFFICIENT_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+grep -Fq "recorded provider source is insufficient for re-materialization: github recovery only supports source.provider.visibility=public" "$TMPDIR/provider-private.err"
+[ ! -d "$PROVIDER_PRIVATE_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'private';" "$PROVIDER_PRIVATE_HOME/.skillspm/library.yaml"
+
+PROVIDER_NON_GITHUB_HOME="$TMPDIR/provider-non-github-home"
+PROVIDER_NON_GITHUB_PROJECT="$TMPDIR/provider-non-github-project"
+mkdir -p "$PROVIDER_NON_GITHUB_HOME/.skillspm" "$PROVIDER_NON_GITHUB_PROJECT"
+cat > "$PROVIDER_NON_GITHUB_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: 2.0.0
+YAML
+cat > "$PROVIDER_NON_GITHUB_HOME/.skillspm/library.yaml" <<YAML
+schema: skills-library/v1
+skills:
+  "github:example/public-skill/skills/provider-demo":
+    versions:
+      2.0.0:
+        path: $PROVIDER_NON_GITHUB_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0
+        cached_at: "2026-03-16T00:00:00.000Z"
+        source:
+          kind: provider
+          value: github:example/public-skill/skills/provider-demo
+          provider:
+            name: openclaw
+            ref: example/provider-demo@2.0.0
+            visibility: public
+YAML
+(
+  cd "$PROVIDER_NON_GITHUB_PROJECT"
+  set +e
+  HOME="$PROVIDER_NON_GITHUB_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-non-github.out" 2> "$TMPDIR/provider-non-github.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "recorded provider source is insufficient for re-materialization: only public github provider provenance is supported, received openclaw" "$TMPDIR/provider-non-github.err"
+[ ! -d "$PROVIDER_NON_GITHUB_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@2.0.0" ]
+assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'openclaw' && entry.source.provider.ref === 'example/provider-demo@2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_NON_GITHUB_HOME/.skillspm/library.yaml"
+
+PROVIDER_UNVERSIONED_HOME="$TMPDIR/provider-unversioned-home"
+PROVIDER_UNVERSIONED_PROJECT="$TMPDIR/provider-unversioned-project"
+mkdir -p "$PROVIDER_UNVERSIONED_HOME/.skillspm" "$PROVIDER_UNVERSIONED_PROJECT"
+cat > "$PROVIDER_UNVERSIONED_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: github:example/public-skill/skills/provider-demo
+    version: unversioned
+YAML
+(
+  cd "$PROVIDER_UNVERSIONED_PROJECT"
+  set +e
+  HOME="$PROVIDER_UNVERSIONED_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install > "$TMPDIR/provider-unversioned.out" 2> "$TMPDIR/provider-unversioned.err"
+  status=$?
+  set -e
+  test "$status" -ne 0
+)
+grep -Fq "persisted project semantics are insufficient for public github recovery" "$TMPDIR/provider-unversioned.err"
+[ ! -d "$PROVIDER_UNVERSIONED_HOME/.skillspm/skills/github_example__public-skill__skills__provider-demo@unversioned" ]
 
 PROVIDER_SYMLINK_ABS_HOME="$TMPDIR/provider-symlink-abs-home"
 PROVIDER_SYMLINK_ABS_PROJECT="$TMPDIR/provider-symlink-abs-project"
@@ -685,7 +1088,7 @@ YAML
   test "$status" -ne 0
 )
 grep -Fq "public github fetch failed for github:example/auth-required/skills/provider-demo" "$TMPDIR/provider-auth.err"
-grep -Fq "Direct provider recovery only supports unauthenticated access to public GitHub repos" "$TMPDIR/provider-auth.err"
+grep -Fq "Public github recovery only supports unauthenticated access to public GitHub repos" "$TMPDIR/provider-auth.err"
 [ ! -d "$PROVIDER_AUTH_HOME/.skillspm/skills/github_example__auth-required__skills__provider-demo@1.0.0" ]
 [ ! -s "$PROVIDER_AUTH_HELPER_LOG" ]
 [ ! -s "$PROVIDER_AUTH_ASKPASS_LOG" ]

@@ -102,6 +102,7 @@ export interface ResolvedSkillNode {
   version: string;
   digest: string;
   resolvedFrom: LockedSkillResolvedFrom;
+  source?: LibrarySkillSource;
   dependencies: SkillDependency[];
   installPath: string;
   metadata?: SkillMetadata;

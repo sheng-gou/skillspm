@@ -408,9 +408,11 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
       "  2. use skills.lock to reproduce exact version+digest when available",
       "  3. reuse the machine-local library on exact match",
       "  4. on cache miss, fall back to pack contents, then recorded local/target sources",
-      "  5. recorded public github provider sources can re-materialize unauthenticated when library.yaml has exact ref provenance",
-      "  6. provider recovery rejects symlinks anywhere under the recovered skill root before caching",
-      "  7. fail closed on digest mismatch instead of silently accepting drift",
+      "  5. locked provider provenance can re-materialize public github sources on clean machines when resolved_from.type=provider and resolved_from.ref is a canonical github: id or anonymous https://github.com/... locator",
+      "  6. recorded public github provider provenance in library.yaml can still supply an exact ref for the same narrow public github cases",
+      "  7. canonical public github: ids with exact versions can otherwise re-materialize unauthenticated from public tag refs",
+      "  8. provider recovery rejects symlinks anywhere under the recovered skill root before caching",
+      "  9. fail closed on digest mismatch instead of silently accepting drift",
       "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"
@@ -559,6 +561,13 @@ function normalizeSkillId(value: string, provider?: string): string {
     return githubFromUrl;
   }
 
+  if (looksLikeGitHubUrl(value)) {
+    throw new CliError(
+      `Invalid GitHub URL: ${value}. Public GitHub locators must be anonymous and must not include query strings or fragments.`,
+      2
+    );
+  }
+
   if (!provider && looksLikeGitHubShorthand(value)) {
     throw new CliError(
       `Ambiguous add input: ${value}. Choose a provider with --provider <provider> or use an explicit provider-prefixed id such as github:${value.replace(/\.git$/u, "")}.`,
@@ -594,6 +603,10 @@ function looksLikeGitHubShorthand(value: string): boolean {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.\/-]+)?$/u.test(value);
 }
 
+function looksLikeGitHubUrl(value: string): boolean {
+  return value.startsWith("https://github.com/") || value.startsWith("http://github.com/");
+}
+
 function parseGitHubUrl(value: string): string | undefined {
   if (!value.startsWith("https://github.com/") && !value.startsWith("http://github.com/")) {
     return undefined;
@@ -603,6 +616,10 @@ function parseGitHubUrl(value: string): string | undefined {
   try {
     parsed = new URL(value);
   } catch {
+    return undefined;
+  }
+
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
     return undefined;
   }
 
