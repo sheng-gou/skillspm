@@ -11,6 +11,7 @@ import { buildLockfileFromNodes, loadLockfile, writeLockfile } from "./lockfile"
 import { createDefaultManifest, isSupportedVersionRange, loadManifest, loadManifestFromPath, saveManifest } from "./manifest";
 import { extractPack } from "./pack";
 import { packProject } from "./packer";
+import { bootstrapPublicProviderSkill, canonicalizePublicGitHubLocator } from "./provider";
 import { resolveProject } from "./resolver";
 import { formatScopeLabel, resolveScopeLayout } from "./scope";
 import { loadSkillMetadata } from "./skill";
@@ -37,6 +38,7 @@ interface AddSkillOptions {
   manifest: SkillsManifest;
   input: string;
   provider?: string;
+  bootstrapRemote?: boolean;
 }
 
 const PUBLIC_COMMANDS = ["add", "install", "pack", "freeze", "adopt", "sync", "doctor", "help"] as const;
@@ -78,7 +80,8 @@ export async function runCli(argv: string[]): Promise<number> {
         layout,
         manifest,
         input: content,
-        provider: options.provider
+        provider: options.provider,
+        bootstrapRemote: options.install === true
       });
       await saveManifest(layout.rootDir, nextManifest);
       const added = nextManifest.skills[nextManifest.skills.length - 1];
@@ -273,8 +276,8 @@ async function listLocalPacks(cwd: string): Promise<string[]> {
     .sort((left, right) => left.localeCompare(right));
 }
 
-async function addSkillToManifest({ commandCwd, layout, manifest, input, provider }: AddSkillOptions): Promise<SkillsManifest> {
-  const normalized = await normalizeAddContent(commandCwd, layout, input, provider);
+async function addSkillToManifest({ commandCwd, layout, manifest, input, provider, bootstrapRemote }: AddSkillOptions): Promise<SkillsManifest> {
+  const normalized = await normalizeAddContent(commandCwd, layout, input, provider, bootstrapRemote);
   const nextSkills = manifest.skills.filter((skill) => skill.id !== normalized.id);
   nextSkills.push(normalized);
   return {
@@ -287,7 +290,8 @@ async function normalizeAddContent(
   commandCwd: string,
   layout: ReturnType<typeof resolveScopeLayout>,
   input: string,
-  provider?: string
+  provider?: string,
+  bootstrapRemote = false
 ): Promise<ManifestSkill> {
   validateProviderName(provider);
 
@@ -305,6 +309,18 @@ async function normalizeAddContent(
 
   const parsed = parseSkillSpecifier(input);
   const canonicalId = normalizeSkillId(parsed.id, provider);
+  if (bootstrapRemote) {
+    const bootstrapped = await bootstrapPublicProviderSkill(layout, input, canonicalId, parsed.version);
+    if (bootstrapped) {
+      const library = await loadLibrary(layout);
+      try {
+        await cacheSkill(layout, library, bootstrapped.manifestSkill.id, bootstrapped.manifestSkill.version ?? "unversioned", bootstrapped.materializedPath, bootstrapped.source);
+      } finally {
+        await bootstrapped.cleanup();
+      }
+      return bootstrapped.manifestSkill;
+    }
+  }
   return {
     id: canonicalId,
     ...(parsed.version ? { version: parsed.version } : {})
@@ -377,6 +393,7 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
       "Provider selection:",
       "  Use --provider <provider> to interpret shorthand or plain ids with a specific provider.",
       "  Ambiguous shorthand such as owner/repo/skill no longer defaults to github.",
+      "  Public github: ids and https://github.com/... locators must stay canonical: no credentials, query/fragment, dot segments, encoded separators, backslashes, or empty path segments.",
       "",
       "Examples:",
       "  skillspm add ./skills/my-skill",
@@ -408,9 +425,9 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
       "  2. use skills.lock to reproduce exact version+digest when available",
       "  3. reuse the machine-local library on exact match",
       "  4. on cache miss, fall back to pack contents, then recorded local/target sources",
-      "  5. locked provider provenance can re-materialize public github sources on clean machines when resolved_from.type=provider and resolved_from.ref is a canonical github: id or anonymous https://github.com/... locator",
-      "  6. recorded public github provider provenance in library.yaml can still supply an exact ref for the same narrow public github cases",
-      "  7. canonical public github: ids with exact versions can otherwise re-materialize unauthenticated from public tag refs",
+      "  5. locked provider provenance can re-materialize supported public provider-backed sources (github, openclaw, clawhub, skills.sh) on clean machines when resolved_from.type=provider and resolved_from.ref is a canonical github: id or anonymous https://github.com/... locator",
+      "  6. recorded public provider provenance in library.yaml can still supply an exact backing locator for the same narrow public-provider cases",
+      "  7. explicit public provider ids (github:, openclaw:, clawhub:, skills.sh:) with exact versions can otherwise re-materialize unauthenticated from public GitHub tag refs",
       "  8. provider recovery rejects symlinks anywhere under the recovered skill root before caching",
       "  9. fail closed on digest mismatch instead of silently accepting drift",
       "",
@@ -552,7 +569,17 @@ function parseSkillSpecifier(input: string): { id: string; version?: string } {
 }
 
 function normalizeSkillId(value: string, provider?: string): string {
-  if (hasExplicitProvider(value)) {
+  const explicitProvider = getExplicitProviderName(value);
+  if (explicitProvider) {
+    if (explicitProvider === "skillsh") {
+      throwUnsupportedSkillshAlias(value);
+    }
+    if (explicitProvider === "github" && !canonicalizePublicGitHubLocator(value)) {
+      throw new CliError(
+        `Invalid GitHub skill id: ${value}. Canonical github: ids must not contain credentials, query strings, fragments, dot segments, encoded separators, backslashes, or empty path segments.`,
+        2
+      );
+    }
     return value;
   }
 
@@ -563,7 +590,7 @@ function normalizeSkillId(value: string, provider?: string): string {
 
   if (looksLikeGitHubUrl(value)) {
     throw new CliError(
-      `Invalid GitHub URL: ${value}. Public GitHub locators must be anonymous and must not include query strings or fragments.`,
+      `Invalid GitHub URL: ${value}. Public GitHub locators must be anonymous canonical https://github.com/... URLs without query strings, fragments, dot segments, encoded separators, backslashes, or empty path segments.`,
       2
     );
   }
@@ -586,17 +613,28 @@ function validateProviderName(provider?: string): void {
   if (!provider) {
     return;
   }
-  if (!/^[a-z][a-z0-9_-]*$/u.test(provider)) {
+  if (provider === "skillsh") {
+    throwUnsupportedSkillshAlias(provider);
+  }
+  if (!/^[a-z][a-z0-9_.-]*$/u.test(provider)) {
     throw new CliError(`Invalid provider name: ${provider}`, 2);
   }
 }
 
-function hasExplicitProvider(value: string): boolean {
-  const match = value.match(/^([a-z][a-z0-9_-]*):/u);
+function throwUnsupportedSkillshAlias(value: string): never {
+  throw new CliError(`Unsupported provider alias: ${value}. Use skills.sh instead.`, 2);
+}
+
+function getExplicitProviderName(value: string): string | undefined {
+  const match = value.match(/^([a-z][a-z0-9_.-]*):/u);
   if (!match) {
-    return false;
+    return undefined;
   }
-  return match[1] !== "http" && match[1] !== "https" && match[1] !== "file";
+  return match[1] !== "http" && match[1] !== "https" && match[1] !== "file" ? match[1] : undefined;
+}
+
+function hasExplicitProvider(value: string): boolean {
+  return getExplicitProviderName(value) !== undefined;
 }
 
 function looksLikeGitHubShorthand(value: string): boolean {
@@ -611,34 +649,10 @@ function parseGitHubUrl(value: string): string | undefined {
   if (!value.startsWith("https://github.com/") && !value.startsWith("http://github.com/")) {
     return undefined;
   }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  if (!value.startsWith("https://github.com/")) {
     return undefined;
   }
-
-  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
-    return undefined;
-  }
-
-  const segments = parsed.pathname.split("/").filter(Boolean);
-  if (segments.length < 2) {
-    return undefined;
-  }
-
-  const owner = segments[0];
-  const repo = segments[1].replace(/\.git$/u, "");
-  let skillPath: string[] = [];
-
-  if ((segments[2] === "tree" || segments[2] === "blob") && segments.length >= 5) {
-    skillPath = segments.slice(4);
-  } else if (segments.length > 2) {
-    skillPath = segments.slice(2);
-  }
-
-  return `github:${[owner, repo, ...skillPath].join("/")}`;
+  return canonicalizePublicGitHubLocator(value);
 }
 
 function looksLikePath(value: string): boolean {

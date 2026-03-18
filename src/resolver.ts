@@ -8,10 +8,14 @@ import { loadLockfile } from "./lockfile";
 import { loadManifest } from "./manifest";
 import { loadSkillMetadata } from "./skill";
 import {
+  buildRecordedProviderLibrarySource,
   getPublicGitHubProjectFallbackFailureReason,
+  getLockedProviderRefForLibrarySource,
   inferPublicGitHubLockfileSourceCandidates,
   inferPublicGitHubProjectSourceCandidates,
-  materializeProviderSource
+  materializeProviderSource,
+  selectPublicProviderProjectVersion,
+  supportsPublicProviderRecoverySkillId
 } from "./provider";
 import type { LoadedPack } from "./pack";
 import type {
@@ -27,6 +31,10 @@ import type {
 } from "./types";
 import { assertSkillRootMarker, exists, hashDirectoryContents, isDirectory } from "./utils";
 import { resolveScopeLayout } from "./scope";
+
+function buildUnsupportedProviderRecoveryFailureReason(skillId: string): string {
+  return `provider recovery is only supported for explicit public provider skill ids (github:, openclaw:, clawhub:, skills.sh:); requested ${skillId}`;
+}
 
 interface ResolveContext {
   cwd: string;
@@ -87,7 +95,7 @@ async function resolveManifestSkill(
   isRoot: boolean,
   chain: string[]
 ): Promise<void> {
-  const version = selectSkillVersion(context, manifestSkill, chain);
+  const version = await selectSkillVersion(context, manifestSkill, chain);
   const materialized = await resolveMaterializedSkillPath(context, manifestSkill.id, version);
   if (!materialized.installPath) {
     throw new CliError(
@@ -138,7 +146,7 @@ async function resolveDependency(context: ResolveContext, dependency: SkillDepen
   ensureDependencyRange(dependency.id, context.nodes.get(dependency.id)?.version, dependency.version, chain);
 }
 
-function selectSkillVersion(context: ResolveContext, manifestSkill: ManifestSkill, chain: string[]): string {
+async function selectSkillVersion(context: ResolveContext, manifestSkill: ManifestSkill, chain: string[]): Promise<string> {
   const requested = manifestSkill.version;
 
   if (requested && isExactVersion(requested)) {
@@ -160,9 +168,14 @@ function selectSkillVersion(context: ResolveContext, manifestSkill: ManifestSkil
     return cachedVersion;
   }
 
+  const providerVersion = await selectPublicProviderProjectVersion(manifestSkill.id, requested);
+  if (providerVersion) {
+    return providerVersion;
+  }
+
   const via = chain.length > 0 ? ` via ${chain.join(" -> ")}` : "";
   throw new CliError(
-    `Unable to resolve an exact version for ${manifestSkill.id}${requested ? ` (${requested})` : ""}${via}. No matching version was found in skills.lock, the provided pack, or recorded library metadata. Freeze exact versions, install from a pack, or add/adopt a source that can be materialized locally first.`,
+    `Unable to resolve an exact version for ${manifestSkill.id}${requested ? ` (${requested})` : ""}${via}. No matching version was found in skills.lock, the provided pack, recorded library metadata, or supported public provider metadata. Freeze exact versions, install from a pack, or add/adopt a source that can be materialized locally first.`,
     3
   );
 }
@@ -257,6 +270,13 @@ async function resolveLockedProviderSourcePath(
   version: string
 ): Promise<MaterializedSkillResolution> {
   const lockEntry = context.lockfile?.skills[skillId];
+  if (lockEntry?.resolved_from?.type === "provider" && !supportsPublicProviderRecoverySkillId(skillId)) {
+    return {
+      applicable: true,
+      failureReason: buildUnsupportedProviderRecoveryFailureReason(skillId)
+    };
+  }
+
   const candidates = inferPublicGitHubLockfileSourceCandidates(lockEntry?.resolved_from, version);
   if (!candidates.applicable) {
     return {
@@ -281,6 +301,7 @@ async function resolveLockedProviderSourcePath(
 
     try {
       const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Locked provider materialized content");
+      const recoveredSource = buildRecordedProviderLibrarySource(skillId, materialized.materializedSource ?? source);
       return {
         applicable: true,
         installPath: materialized.installPath,
@@ -289,7 +310,7 @@ async function resolveLockedProviderSourcePath(
           type: "provider",
           ref: source.value
         },
-        source
+        source: recoveredSource
       };
     } catch (error) {
       await rm(materialized.installPath, { recursive: true, force: true });
@@ -364,6 +385,12 @@ async function resolveRecordedLibraryProviderSourcePath(
     return {};
   }
 
+  if (!supportsPublicProviderRecoverySkillId(skillId)) {
+    return {
+      failureReason: buildUnsupportedProviderRecoveryFailureReason(skillId)
+    };
+  }
+
   const layout = resolveScopeLayout(context.cwd);
   const materialized = await materializeProviderSource(layout, skillId, version, source);
   if (!materialized.installPath) {
@@ -375,6 +402,9 @@ async function resolveRecordedLibraryProviderSourcePath(
   try {
     const lockEntry = context.lockfile?.skills[skillId];
     const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Recorded provider materialized content");
+    const recoveredSource = source.provider?.name === "github" && !source.provider.ref
+      ? materialized.materializedSource ?? source
+      : buildRecordedProviderLibrarySource(skillId, materialized.materializedSource ?? source);
     return {
       installPath: materialized.installPath,
       digest,
@@ -382,7 +412,7 @@ async function resolveRecordedLibraryProviderSourcePath(
         type: "provider",
         ref: source.value
       },
-      source
+      source: recoveredSource
     };
   } catch (error) {
     await rm(materialized.installPath, { recursive: true, force: true });
@@ -395,7 +425,7 @@ async function resolvePublicGitHubProjectSourcePath(
   skillId: string,
   version: string
 ): Promise<MaterializedSkillResolution> {
-  const candidates = inferPublicGitHubProjectSourceCandidates(skillId, version);
+  const candidates = await inferPublicGitHubProjectSourceCandidates(skillId, version);
   if (!candidates.applicable) {
     return {};
   }
@@ -424,7 +454,7 @@ async function resolvePublicGitHubProjectSourcePath(
           type: "provider",
           ref: source.value
         },
-        source
+        source: buildRecordedProviderLibrarySource(skillId, materialized.materializedSource ?? source)
       };
     } catch (error) {
       await rm(materialized.installPath, { recursive: true, force: true });
@@ -478,6 +508,22 @@ function satisfiesRequestedVersion(resolvedVersion: string, requestedRange: stri
 
 function getCachedResolvedFrom(context: ResolveContext, skillId: string, version: string): LockedSkillResolvedFrom {
   const source = context.library.skills[skillId]?.versions[version]?.source;
+  if (source?.kind === "provider") {
+    const providerRef = supportsPublicProviderRecoverySkillId(skillId)
+      ? getLockedProviderRefForLibrarySource(source)
+      : undefined;
+    if (providerRef) {
+      return {
+        type: "provider",
+        ref: providerRef
+      };
+    }
+    return {
+      type: "cache",
+      ref: `${skillId}@${version}`
+    };
+  }
+
   if (source) {
     return {
       type: source.kind,
@@ -489,6 +535,7 @@ function getCachedResolvedFrom(context: ResolveContext, skillId: string, version
     ref: `${skillId}@${version}`
   };
 }
+
 
 async function verifyLockedPath(
   skillId: string,
