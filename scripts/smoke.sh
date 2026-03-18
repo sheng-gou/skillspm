@@ -176,27 +176,55 @@ EOF_SKILL
   "${CLI[@]}" add example/skill@^1.0.0 --provider openclaw
 )
 
-assert_node "const [manifest] = docs; if (!manifest || Array.isArray(manifest)) return false; const keys = Object.keys(manifest).sort(); if (keys.join(',') !== 'skills') return false; if (manifest.skills.some((entry) => 'path' in entry || 'source' in entry)) return false; const ids = manifest.skills.map((entry) => entry.id + '@' + (entry.version ?? '')); return ids.includes('local/example@1.2.3') && ids.includes('github:owner/repo/skills/demo@^2.0.0') && ids.includes('github:example/tools/skills/url-demo@') && ids.includes('openclaw:example/skill@^1.0.0');" "$ADD_PROJECT/skills.yaml"
+assert_node "const [manifest] = docs; if (!manifest || Array.isArray(manifest)) return false; const keys = Object.keys(manifest).sort(); if (keys.join(',') !== 'skills') return false; const local = manifest.skills.find((entry) => entry.id === 'local/example'); const github = manifest.skills.find((entry) => entry.id === 'github:owner/repo/skills/demo'); const url = manifest.skills.find((entry) => entry.id === 'github:example/tools/skills/url-demo'); const openclaw = manifest.skills.find((entry) => entry.id === 'openclaw:example/skill'); return Boolean(local && local.version === '1.2.3' && local.source?.kind === 'local' && local.source.value.endsWith('/local-skill') && github && github.version === '^2.0.0' && !('source' in github) && url && !('source' in url) && openclaw && openclaw.version === '^1.0.0' && !('source' in openclaw));" "$ADD_PROJECT/skills.yaml"
 assert_node "const [library] = docs; const entry = library.skills['local/example'].versions['1.2.3']; return entry.source.kind === 'local' && entry.source.value.endsWith('/local-skill');" "$HOME/.skillspm/library.yaml"
 
 LOCAL_INSTALL_PROJECT="$TMPDIR/local-install-project"
 mkdir -p "$LOCAL_INSTALL_PROJECT"
-cat > "$LOCAL_INSTALL_PROJECT/skills.yaml" <<'YAML'
+cat > "$LOCAL_INSTALL_PROJECT/skills.yaml" <<YAML
 skills:
   - id: local/example
     version: 1.2.3
+    source:
+      kind: local
+      value: $ADD_PROJECT/local-skill
 YAML
 
-rm -rf "$HOME/.skillspm/skills/local__example@1.2.3"
+rm -rf "$HOME/.skillspm"
 (
   cd "$LOCAL_INSTALL_PROJECT"
   "${CLI[@]}" install
   "${CLI[@]}" freeze
 )
-assert_node "const [library] = docs; const entry = library.skills['local/example'].versions['1.2.3']; return entry.path.endsWith('/local__example@1.2.3') && entry.source.kind === 'local' && entry.source.value.endsWith('/local-skill');" "$HOME/.skillspm/library.yaml"
+assert_node "const [manifest, library] = docs; const root = manifest.skills[0]; const entry = library.skills['local/example'].versions['1.2.3']; return root.id === 'local/example' && root.version === '1.2.3' && root.source.kind === 'local' && root.source.value.endsWith('/local-skill') && entry.path.endsWith('/local__example@1.2.3') && entry.source.kind === 'local' && entry.source.value.endsWith('/local-skill');" "$LOCAL_INSTALL_PROJECT/skills.yaml" "$HOME/.skillspm/library.yaml"
 [ -f "$LOCAL_INSTALL_PROJECT/skills.lock" ]
 assert_node "const [lockfile] = docs; const entry = lockfile.skills['local/example']; return lockfile.schema === 'skills-lock/v3' && entry.version === '1.2.3' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'local' && entry.resolved_from.ref.endsWith('/local-skill');" "$LOCAL_INSTALL_PROJECT/skills.lock"
 [ -d "$HOME/.skillspm/skills/local__example@1.2.3" ]
+
+EXPLICIT_MANIFEST_PATH_HOME="$TMPDIR/explicit-manifest-path-home"
+EXPLICIT_MANIFEST_PATH_PROJECT="$TMPDIR/explicit-manifest-path-project"
+EXPLICIT_MANIFEST_PATH_RUN_CWD="$TMPDIR/explicit-manifest-path-run-cwd"
+mkdir -p "$EXPLICIT_MANIFEST_PATH_HOME" "$EXPLICIT_MANIFEST_PATH_PROJECT/relative-skill" "$EXPLICIT_MANIFEST_PATH_RUN_CWD"
+cat > "$EXPLICIT_MANIFEST_PATH_PROJECT/relative-skill/skill.yaml" <<'YAML'
+id: local/relative-manifest
+version: 9.8.7
+YAML
+cat > "$EXPLICIT_MANIFEST_PATH_PROJECT/relative-skill/SKILL.md" <<'EOF_SKILL'
+# Relative manifest skill
+EOF_SKILL
+cat > "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: local/relative-manifest
+    version: 9.8.7
+    source:
+      kind: local
+      value: ./relative-skill
+YAML
+(
+  cd "$EXPLICIT_MANIFEST_PATH_RUN_CWD"
+  HOME="$EXPLICIT_MANIFEST_PATH_HOME" "${CLI[@]}" install "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.yaml"
+)
+assert_node "const [manifest, lockfile] = docs; const root = manifest.skills[0]; const entry = lockfile.skills['local/relative-manifest']; return root.source.kind === 'local' && root.source.value === './relative-skill' && entry.version === '9.8.7' && entry.resolved_from.type === 'local' && entry.resolved_from.ref === '$EXPLICIT_MANIFEST_PATH_PROJECT/relative-skill';" "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.yaml" "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.lock"
 
 CACHE_PRIORITY_PROJECT="$TMPDIR/cache-priority-project"
 mkdir -p "$CACHE_PRIORITY_PROJECT/cache-skill"
@@ -250,6 +278,44 @@ tar -czf "$TMPDIR/cache-priority.skillspm.tgz" -C "$PACK_BUILD_ROOT" .
 )
 grep -Fxq "cache" "$HOME/.skillspm/skills/local__priority@1.0.0/materialization.txt"
 
+PACK_PROVENANCE_SOURCE="$TMPDIR/pack-provenance-source"
+mkdir -p "$PACK_PROVENANCE_SOURCE/local-skill"
+cat > "$PACK_PROVENANCE_SOURCE/local-skill/skill.yaml" <<'YAML'
+id: local/pack-source
+version: 4.0.0
+YAML
+cat > "$PACK_PROVENANCE_SOURCE/local-skill/SKILL.md" <<'EOF_SKILL'
+# Pack provenance source
+EOF_SKILL
+(
+  cd "$PACK_PROVENANCE_SOURCE"
+  "${CLI[@]}" add ./local-skill
+  "${CLI[@]}" install
+  "${CLI[@]}" pack "$TMPDIR/pack-provenance.skillspm.tgz"
+)
+PACK_PROVENANCE_HOME="$TMPDIR/pack-provenance-home"
+PACK_PROVENANCE_INSTALL_CWD="$TMPDIR/pack-provenance-install-cwd"
+PACK_PROVENANCE_PROJECT="$TMPDIR/pack-provenance-project"
+mkdir -p "$PACK_PROVENANCE_HOME" "$PACK_PROVENANCE_INSTALL_CWD" "$PACK_PROVENANCE_PROJECT"
+(
+  cd "$PACK_PROVENANCE_INSTALL_CWD"
+  HOME="$PACK_PROVENANCE_HOME" "${CLI[@]}" install "$TMPDIR/pack-provenance.skillspm.tgz"
+)
+assert_node "const [library] = docs; const entry = library.skills['local/pack-source'].versions['4.0.0']; return entry.source.kind === 'local' && entry.source.value.endsWith('/local-skill');" "$PACK_PROVENANCE_HOME/.skillspm/library.yaml"
+tar -xzf "$TMPDIR/pack-provenance.skillspm.tgz" -C "$PACK_PROVENANCE_PROJECT"
+assert_node "const [manifest] = docs; const root = manifest.skills[0]; return manifest.skills.length === 1 && root.id === 'local/pack-source' && root.version === '4.0.0' && root.source.kind === 'local' && root.source.value.endsWith('/local-skill');" "$PACK_PROVENANCE_PROJECT/skills.yaml"
+(
+  cd "$PACK_PROVENANCE_PROJECT"
+  HOME="$PACK_PROVENANCE_HOME" "${CLI[@]}" freeze
+)
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['local/pack-source']; return lockfile.schema === 'skills-lock/v3' && entry.version === '4.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'local' && entry.resolved_from.ref.endsWith('/local-skill');" "$PACK_PROVENANCE_PROJECT/skills.lock"
+rm -rf "$PACK_PROVENANCE_HOME/.skillspm/skills/local__pack-source@4.0.0"
+(
+  cd "$PACK_PROVENANCE_PROJECT"
+  HOME="$PACK_PROVENANCE_HOME" "${CLI[@]}" install
+)
+[ -d "$PACK_PROVENANCE_HOME/.skillspm/skills/local__pack-source@4.0.0" ]
+
 # Adopt positional sources + multi-target sync + doctor scope/conflict reporting
 mkdir -p "$HOME/.openclaw/skills/adopt-openclaw" "$HOME/.codex/skills/adopt-codex"
 cat > "$HOME/.openclaw/skills/adopt-openclaw/skill.yaml" <<'YAML'
@@ -277,7 +343,7 @@ mkdir -p "$ADOPT_PROJECT"
   "${CLI[@]}" sync openclaw,codex
 )
 
-assert_node "const [manifest] = docs; const keys = Object.keys(manifest).sort().join(','); if (keys !== 'skills') return false; if (manifest.skills.some((entry) => 'path' in entry)) return false; const ids = manifest.skills.map((entry) => entry.id + '@' + entry.version); return ids.includes('adopted/codex@3.1.0') && ids.includes('adopted/openclaw@2.0.0');" "$ADOPT_PROJECT/skills.yaml"
+assert_node "const [manifest] = docs; const keys = Object.keys(manifest).sort().join(','); if (keys !== 'skills') return false; if (manifest.skills.some((entry) => 'path' in entry)) return false; const openclaw = manifest.skills.find((entry) => entry.id === 'adopted/openclaw'); const codex = manifest.skills.find((entry) => entry.id === 'adopted/codex'); return openclaw?.version === '2.0.0' && openclaw?.source?.kind === 'target' && openclaw.source.value.endsWith('/adopt-openclaw') && codex?.version === '3.1.0' && codex?.source?.kind === 'target' && codex.source.value.endsWith('/adopt-codex');" "$ADOPT_PROJECT/skills.yaml"
 [ -f "$ADOPT_PROJECT/skills.lock" ]
 assert_node "const [lockfile] = docs; const openclaw = lockfile.skills['adopted/openclaw']; const codex = lockfile.skills['adopted/codex']; return lockfile.schema === 'skills-lock/v3' && openclaw.version === '2.0.0' && codex.version === '3.1.0' && /^sha256:[0-9a-f]{64}$/.test(openclaw.digest) && /^sha256:[0-9a-f]{64}$/.test(codex.digest) && openclaw.resolved_from.type === 'target' && codex.resolved_from.type === 'target';" "$ADOPT_PROJECT/skills.lock"
 [ -f "$HOME/.skillspm/library.yaml" ]
@@ -417,16 +483,22 @@ PROVIDER_BOOTSTRAP_HOME="$TMPDIR/provider-bootstrap-home"
 PROVIDER_BOOTSTRAP_CLEAN_HOME="$TMPDIR/provider-bootstrap-clean-home"
 PROVIDER_DIRECT_SKILLS_SH_HOME="$TMPDIR/provider-direct-skills-sh-home"
 PROVIDER_DIRECT_OPENCLAW_HOME="$TMPDIR/provider-direct-openclaw-home"
+PROVIDER_RECORDED_SKILLS_SH_HOME="$TMPDIR/provider-recorded-skills-sh-home"
+PROVIDER_RECORDED_OPENCLAW_HOME="$TMPDIR/provider-recorded-openclaw-home"
+PROVIDER_RECORDED_CLAWHUB_HOME="$TMPDIR/provider-recorded-clawhub-home"
 PROVIDER_SKILLS_SH_PROJECT="$TMPDIR/provider-skills-sh-project"
 PROVIDER_OPENCLAW_PROJECT="$TMPDIR/provider-openclaw-project"
 PROVIDER_CLAWHUB_PROJECT="$TMPDIR/provider-clawhub-project"
 PROVIDER_DIRECT_SKILLS_SH_PROJECT="$TMPDIR/provider-direct-skills-sh-project"
 PROVIDER_DIRECT_OPENCLAW_PROJECT="$TMPDIR/provider-direct-openclaw-project"
+PROVIDER_RECORDED_SKILLS_SH_PROJECT="$TMPDIR/provider-recorded-skills-sh-project"
+PROVIDER_RECORDED_OPENCLAW_PROJECT="$TMPDIR/provider-recorded-openclaw-project"
+PROVIDER_RECORDED_CLAWHUB_PROJECT="$TMPDIR/provider-recorded-clawhub-project"
 PROVIDER_BOOTSTRAP_FAIL_PROJECT="$TMPDIR/provider-bootstrap-fail-project"
 PROVIDER_SKILLS_SH_FIXTURE_ROOT="$TMPDIR/provider-skills-sh-fixtures"
 PROVIDER_OPENCLAW_FIXTURE_ROOT="$TMPDIR/provider-openclaw-fixtures"
 PROVIDER_CLAWHUB_FIXTURE_ROOT="$TMPDIR/provider-clawhub-fixtures"
-mkdir -p "$PROVIDER_BOOTSTRAP_HOME" "$PROVIDER_BOOTSTRAP_CLEAN_HOME" "$PROVIDER_DIRECT_SKILLS_SH_HOME" "$PROVIDER_DIRECT_OPENCLAW_HOME" "$PROVIDER_SKILLS_SH_PROJECT" "$PROVIDER_OPENCLAW_PROJECT" "$PROVIDER_CLAWHUB_PROJECT" "$PROVIDER_DIRECT_SKILLS_SH_PROJECT" "$PROVIDER_DIRECT_OPENCLAW_PROJECT" "$PROVIDER_BOOTSTRAP_FAIL_PROJECT" "$PROVIDER_SKILLS_SH_FIXTURE_ROOT/acme" "$PROVIDER_OPENCLAW_FIXTURE_ROOT/api/v1/skills/example" "$PROVIDER_CLAWHUB_FIXTURE_ROOT/api/v1/skills/example"
+mkdir -p "$PROVIDER_BOOTSTRAP_HOME" "$PROVIDER_BOOTSTRAP_CLEAN_HOME" "$PROVIDER_DIRECT_SKILLS_SH_HOME" "$PROVIDER_DIRECT_OPENCLAW_HOME" "$PROVIDER_RECORDED_SKILLS_SH_HOME" "$PROVIDER_RECORDED_OPENCLAW_HOME" "$PROVIDER_RECORDED_CLAWHUB_HOME" "$PROVIDER_SKILLS_SH_PROJECT" "$PROVIDER_OPENCLAW_PROJECT" "$PROVIDER_CLAWHUB_PROJECT" "$PROVIDER_DIRECT_SKILLS_SH_PROJECT" "$PROVIDER_DIRECT_OPENCLAW_PROJECT" "$PROVIDER_RECORDED_SKILLS_SH_PROJECT" "$PROVIDER_RECORDED_OPENCLAW_PROJECT" "$PROVIDER_RECORDED_CLAWHUB_PROJECT" "$PROVIDER_BOOTSTRAP_FAIL_PROJECT" "$PROVIDER_SKILLS_SH_FIXTURE_ROOT/acme" "$PROVIDER_OPENCLAW_FIXTURE_ROOT/api/v1/skills/example" "$PROVIDER_CLAWHUB_FIXTURE_ROOT/api/v1/skills/example"
 
 cat > "$PROVIDER_SKILLS_SH_FIXTURE_ROOT/acme/demo-skill.html" <<'EOF_SKILLS_SH'
 <html><body><code>npx skills add https://github.com/example/skills-sh-skill --skill skills/demo-skill</code></body></html>
@@ -570,7 +642,7 @@ printf 'clawhub\n' > "$CLAWHUB_WORKTREE/skills/provider-demo/materialization.txt
   SKILLSPM_TEST_SKILLS_SH_BASE_URL="$PROVIDER_SKILLS_SH_BASE_URL" \
   "${CLI[@]}" add skills.sh:acme/demo-skill --install
 )
-assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['skills.sh:acme/demo-skill']; return manifest.skills.length === 1 && manifest.skills[0].id === 'skills.sh:acme/demo-skill' && manifest.skills[0].version === '1.5.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '1.5.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/skills-sh-skill/skills/demo-skill';" "$PROVIDER_SKILLS_SH_PROJECT/skills.yaml" "$PROVIDER_SKILLS_SH_PROJECT/skills.lock"
+assert_node "const [manifest, lockfile] = docs; const root = manifest.skills[0]; const entry = lockfile.skills['skills.sh:acme/demo-skill']; return manifest.skills.length === 1 && root.id === 'skills.sh:acme/demo-skill' && root.version === '1.5.0' && root.source.kind === 'provider' && root.source.value === 'skills.sh:acme/demo-skill' && root.source.provider.name === 'skills.sh' && root.source.provider.ref === 'github:example/skills-sh-skill/skills/demo-skill' && lockfile.schema === 'skills-lock/v3' && entry.version === '1.5.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/skills-sh-skill/skills/demo-skill';" "$PROVIDER_SKILLS_SH_PROJECT/skills.yaml" "$PROVIDER_SKILLS_SH_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['skills.sh:acme/demo-skill'].versions['1.5.0']; return entry.source.kind === 'provider' && entry.source.value === 'skills.sh:acme/demo-skill' && entry.source.provider.name === 'skills.sh' && entry.source.provider.ref === 'github:example/skills-sh-skill/skills/demo-skill' && entry.source.provider.visibility === 'public';" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/library.yaml"
 grep -Fxq "skills-sh" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/skills/skills.sh_acme__demo-skill@1.5.0/materialization.txt"
 
@@ -581,7 +653,7 @@ grep -Fxq "skills-sh" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/skills/skills.sh_acme_
   SKILLSPM_TEST_OPENCLAW_BASE_URL="$PROVIDER_OPENCLAW_BASE_URL" \
   "${CLI[@]}" add openclaw:example/provider-demo --install
 )
-assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['openclaw:example/provider-demo']; return manifest.skills.length === 1 && manifest.skills[0].id === 'openclaw:example/provider-demo' && manifest.skills[0].version === '2.1.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.1.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/openclaw-skill/skills/provider-demo';" "$PROVIDER_OPENCLAW_PROJECT/skills.yaml" "$PROVIDER_OPENCLAW_PROJECT/skills.lock"
+assert_node "const [manifest, lockfile] = docs; const root = manifest.skills[0]; const entry = lockfile.skills['openclaw:example/provider-demo']; return manifest.skills.length === 1 && root.id === 'openclaw:example/provider-demo' && root.version === '2.1.0' && root.source.kind === 'provider' && root.source.value === 'openclaw:example/provider-demo' && root.source.provider.name === 'openclaw' && root.source.provider.ref === 'github:example/openclaw-skill/skills/provider-demo' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.1.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/openclaw-skill/skills/provider-demo';" "$PROVIDER_OPENCLAW_PROJECT/skills.yaml" "$PROVIDER_OPENCLAW_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['openclaw:example/provider-demo'].versions['2.1.0']; return entry.source.kind === 'provider' && entry.source.value === 'openclaw:example/provider-demo' && entry.source.provider.name === 'openclaw' && entry.source.provider.ref === 'github:example/openclaw-skill/skills/provider-demo' && entry.source.provider.visibility === 'public';" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/library.yaml"
 grep -Fxq "openclaw" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/skills/openclaw_example__provider-demo@2.1.0/materialization.txt"
 
@@ -592,7 +664,7 @@ grep -Fxq "openclaw" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/skills/openclaw_example
   SKILLSPM_TEST_CLAWHUB_BASE_URL="$PROVIDER_CLAWHUB_BASE_URL" \
   "${CLI[@]}" add clawhub:example/provider-demo --install
 )
-assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['clawhub:example/provider-demo']; return manifest.skills.length === 1 && manifest.skills[0].id === 'clawhub:example/provider-demo' && manifest.skills[0].version === '2.2.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.2.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/clawhub-skill/skills/provider-demo';" "$PROVIDER_CLAWHUB_PROJECT/skills.yaml" "$PROVIDER_CLAWHUB_PROJECT/skills.lock"
+assert_node "const [manifest, lockfile] = docs; const root = manifest.skills[0]; const entry = lockfile.skills['clawhub:example/provider-demo']; return manifest.skills.length === 1 && root.id === 'clawhub:example/provider-demo' && root.version === '2.2.0' && root.source.kind === 'provider' && root.source.value === 'clawhub:example/provider-demo' && root.source.provider.name === 'clawhub' && root.source.provider.ref === 'github:example/clawhub-skill/skills/provider-demo' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.2.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/clawhub-skill/skills/provider-demo';" "$PROVIDER_CLAWHUB_PROJECT/skills.yaml" "$PROVIDER_CLAWHUB_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['clawhub:example/provider-demo'].versions['2.2.0']; return entry.source.kind === 'provider' && entry.source.value === 'clawhub:example/provider-demo' && entry.source.provider.name === 'clawhub' && entry.source.provider.ref === 'github:example/clawhub-skill/skills/provider-demo' && entry.source.provider.visibility === 'public';" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/library.yaml"
 grep -Fxq "clawhub" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/skills/clawhub_example__provider-demo@2.2.0/materialization.txt"
 
@@ -605,6 +677,69 @@ grep -Fxq "clawhub" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/skills/clawhub_example__
 )
 assert_node "const [library] = docs; const entry = library.skills['openclaw:example/provider-demo'].versions['2.1.0']; return entry.source.kind === 'provider' && entry.source.value === 'openclaw:example/provider-demo' && entry.source.provider.name === 'openclaw' && entry.source.provider.ref === 'github:example/openclaw-skill/skills/provider-demo' && entry.source.provider.visibility === 'public';" "$PROVIDER_BOOTSTRAP_CLEAN_HOME/.skillspm/library.yaml"
 grep -Fxq "openclaw" "$PROVIDER_BOOTSTRAP_CLEAN_HOME/.skillspm/skills/openclaw_example__provider-demo@2.1.0/materialization.txt"
+
+cat > "$PROVIDER_RECORDED_SKILLS_SH_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: skills.sh:acme/demo-skill
+    version: 1.5.0
+    source:
+      kind: provider
+      value: skills.sh:acme/demo-skill
+      provider:
+        name: skills.sh
+        ref: github:example/skills-sh-skill/skills/demo-skill
+        visibility: public
+YAML
+(
+  cd "$PROVIDER_RECORDED_SKILLS_SH_PROJECT"
+  HOME="$PROVIDER_RECORDED_SKILLS_SH_HOME" \
+  SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
+  SKILLSPM_TEST_SKILLS_SH_BASE_URL="$PROVIDER_SKILLS_SH_BASE_URL" \
+  "${CLI[@]}" install
+)
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['skills.sh:acme/demo-skill']; return entry.version === '1.5.0' && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/skills-sh-skill/skills/demo-skill';" "$PROVIDER_RECORDED_SKILLS_SH_PROJECT/skills.lock"
+
+cat > "$PROVIDER_RECORDED_OPENCLAW_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: openclaw:example/provider-demo
+    version: 2.1.0
+    source:
+      kind: provider
+      value: openclaw:example/provider-demo
+      provider:
+        name: openclaw
+        ref: github:example/openclaw-skill/skills/provider-demo
+        visibility: public
+YAML
+(
+  cd "$PROVIDER_RECORDED_OPENCLAW_PROJECT"
+  HOME="$PROVIDER_RECORDED_OPENCLAW_HOME" \
+  SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
+  SKILLSPM_TEST_OPENCLAW_BASE_URL="$PROVIDER_OPENCLAW_BASE_URL" \
+  "${CLI[@]}" install
+)
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['openclaw:example/provider-demo']; return entry.version === '2.1.0' && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/openclaw-skill/skills/provider-demo';" "$PROVIDER_RECORDED_OPENCLAW_PROJECT/skills.lock"
+
+cat > "$PROVIDER_RECORDED_CLAWHUB_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: clawhub:example/provider-demo
+    version: 2.2.0
+    source:
+      kind: provider
+      value: clawhub:example/provider-demo
+      provider:
+        name: clawhub
+        ref: github:example/clawhub-skill/skills/provider-demo
+        visibility: public
+YAML
+(
+  cd "$PROVIDER_RECORDED_CLAWHUB_PROJECT"
+  HOME="$PROVIDER_RECORDED_CLAWHUB_HOME" \
+  SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
+  SKILLSPM_TEST_CLAWHUB_BASE_URL="$PROVIDER_CLAWHUB_BASE_URL" \
+  "${CLI[@]}" install
+)
+assert_node "const [lockfile] = docs; const entry = lockfile.skills['clawhub:example/provider-demo']; return entry.version === '2.2.0' && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/clawhub-skill/skills/provider-demo';" "$PROVIDER_RECORDED_CLAWHUB_PROJECT/skills.lock"
 
 cat > "$PROVIDER_DIRECT_SKILLS_SH_PROJECT/skills.yaml" <<'YAML'
 skills:

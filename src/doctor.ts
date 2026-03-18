@@ -79,7 +79,7 @@ async function collectDoctorReport(layout: ScopeLayout): Promise<DoctorReport> {
   });
   findings.push({
     level: "info",
-    message: "manifest contract validated (public skills.yaml shape is skills + targets)"
+    message: "manifest contract validated (public skills.yaml shape is skills[+source] + targets)"
   });
   findings.push({
     level: "info",

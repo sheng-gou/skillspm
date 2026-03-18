@@ -167,7 +167,11 @@ async function createManifestSkill(
   return {
     manifestSkill: {
       id: metadata?.id ?? `local/${path.basename(skillRoot)}`,
-      version
+      version,
+      source: {
+        kind: sourceKind,
+        value: skillRoot
+      }
     },
     skillRoot,
     hasVersion: Boolean(metadata?.version),

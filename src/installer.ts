@@ -3,7 +3,7 @@ import { buildLockfileFromNodes, writeLockfile } from "./lockfile";
 import type { LoadedPack } from "./pack";
 import { resolveProject } from "./resolver";
 import type { ScopeLayout } from "./scope";
-import type { SkillsLock, SkillsManifest } from "./types";
+import type { ManifestSkill, SkillsLock, SkillsManifest } from "./types";
 import { printInfo, printSuccess } from "./utils";
 
 export interface InstallProjectResult {
@@ -43,6 +43,26 @@ export async function installProject(layout: ScopeLayout, options: InstallProjec
 
   return {
     lockfile,
-    manifest: resolution.manifest
+    manifest: enrichManifestSources(resolution.manifest, resolution.rootSkillIds, resolution.nodes)
+  };
+}
+
+function enrichManifestSources(
+  manifest: SkillsManifest,
+  rootSkillIds: string[],
+  nodes: Map<string, { source?: ManifestSkill["source"] }>
+): SkillsManifest {
+  const rootIds = new Set(rootSkillIds);
+  return {
+    ...manifest,
+    skills: manifest.skills.map((skill) => {
+      if (!rootIds.has(skill.id)) {
+        return skill;
+      }
+      const resolved = nodes.get(skill.id);
+      return resolved?.source
+        ? { ...skill, source: resolved.source }
+        : skill;
+    })
   };
 }

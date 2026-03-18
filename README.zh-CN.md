@@ -14,13 +14,13 @@
 - `~/.skillspm/library.yaml`
 - `~/.skillspm/skills/`
 
-`skills.yaml` 被刻意收缩为最小公开契约：只保留期望的 `skills` 和可选的 `targets`。
+`skills.yaml` 被刻意收缩为最小公开契约：只保留期望的 `skills`、可选的每个 root `source`，以及可选的 `targets`。
 
 `skills.lock` 为每个 skill 记录精确锁定的结果身份：精确版本、内容摘要，以及解析来源。
 
 机器本地 library 不是项目真相，而是 `install`、`pack`、`adopt`、`sync` 使用的本地缓存/物化层。
 
-`skillspm install` 会先读取 `skills.yaml`，在存在时参考 `skills.lock`，检查机器本地 library 中是否存在精确内容匹配；只有在 cache miss 时才回退到 pack 内容或已记录的本地/target source。对于 `skills.lock` 里 `resolved_from.type=provider` 且 `resolved_from.ref` 是规范 `github:` locator 或匿名公共 `https://github.com/...` locator 的条目，即使在干净机器上也可以重新物化 public provider-backed source；`~/.skillspm/library.yaml` 还能保留原始 provider id（如 `openclaw:...`、`clawhub:...`、`skills.sh:...`）以及背后的公共 GitHub locator。带精确版本的规范公共 `github:` skill 和这些 provider-backed public skill 仍然可以通过未认证的公共 tag 抓取恢复。恢复出来的 provider skill root 必须完全不含 symlink。若内容摘要不匹配，会 fail closed，而不是静默接受漂移。
+`skillspm install` 会先读取 `skills.yaml`，在存在时参考 `skills.lock`，检查机器本地 library 中是否存在精确内容匹配；只有在 cache miss 时才回退到 pack 内容或 manifest/library 里记录的 source。对于 `skills.lock` 里 `resolved_from.type=provider` 且 `resolved_from.ref` 是规范 `github:` locator 或匿名公共 `https://github.com/...` locator 的条目，即使在干净机器上也可以重新物化 public provider-backed source；记录下来的 provider provenance 还能保留原始 provider id（如 `openclaw:...`、`clawhub:...`、`skills.sh:...`）以及背后的公共 GitHub locator。带精确版本的规范公共 `github:` skill 和这些 provider-backed public skill 仍然可以通过未认证的公共 tag 抓取恢复。恢复出来的 provider skill root 必须完全不含 symlink。若内容摘要不匹配，会 fail closed，而不是静默接受漂移。
 
 这个分支里的 provider 恢复能力仍然被刻意收窄：干净机器上的回退只覆盖 public GitHub-backed provider（`github`、`openclaw`、`clawhub`、`skills.sh`），而且只允许未认证访问。`skills.sh:` id 通过其公开的 GitHub repo/path 语义解析；`openclaw:` / `clawhub:` id 通过公开 provider 元数据解析出背后的 public GitHub locator。恢复路径会禁用 credential helper、askpass hook 和终端交互，因此任何私有/需要认证的 GitHub 访问都会诚实地 fail closed。私有仓库、需要认证的 provider 流程、非 public 可见性，以及 plain git 输入仍然必须依赖现有 cache 或 pack。
 
@@ -58,6 +58,9 @@ source:
 skills:
   - id: local/example
     version: 0.1.0
+    source:
+      kind: local
+      value: ./skills/local-example
   - id: github:owner/repo/skill
     version: ^1.2.0
 targets:
@@ -124,7 +127,7 @@ skillspm add clawhub:example/skill --install
 skillspm add skills.sh:owner/repo/skill --install
 ```
 
-对于本地路径，`add` 会先把 skill 物化到 `~/.skillspm/library.yaml` 和 `~/.skillspm/skills/`，然后只把 `id` 和 `version` 写进 `skills.yaml`。
+对于本地路径，`add` 会先把 skill 物化到 `~/.skillspm/library.yaml` 和 `~/.skillspm/skills/`，同时把后续重物化所需的最小 `source` 信息一并写进 `skills.yaml`，这样即使本地 library/cache 被清掉，后续 install 也不会再假设之前跑过 add。
 
 ## `adopt` 与 `sync`
 
@@ -139,7 +142,7 @@ skillspm sync claude_code
 skillspm sync openclaw,codex
 ```
 
-`adopt` 也可以直接接收一个本地目录路径，而不是 target 名称。对于本地路径和已知 target，`adopt` 会把 source 路径记录到机器本地 library 中，以便后续 install 在 cache miss 时恢复。
+`adopt` 也可以直接接收一个本地目录路径，而不是 target 名称。对于本地路径和已知 target，`adopt` 会把 source 路径同时记录到项目 `skills.yaml` 和机器本地 library 中；只要该 source 路径仍然存在，后续 install 即使在干净 library 上也能从 cache miss 恢复。
 
 ## `install` 输入优先级
 
@@ -157,7 +160,7 @@ skillspm sync openclaw,codex
 2. 在存在时使用 `skills.lock` 复现精确版本 + digest
 3. 命中精确内容时复用机器本地 library
 4. cache miss 时回退到 pack 内容
-5. pack miss 时回退到已记录的本地/target source 路径
+5. pack miss 时回退到已记录的 manifest/library source（本地、target，或受支持的 public-provider provenance）
 6. 如果 `skills.lock` 记录了 `resolved_from.type=provider`，且 locator 是规范公共 `github:` id 或匿名公共 `https://github.com/...` locator，则先尝试该 lockfile 驱动的 public recovery
 7. 否则，如果 `library.yaml` 记录了 public provider provenance，则在 cache miss 时优先使用该 provenance（`github` 可以保存精确 ref；`openclaw` / `clawhub` / `skills.sh` 保存原始 provider id + 背后的 public GitHub locator）
 8. 否则，如果 skill id 本身就是受支持的 public provider id（`github:...`、`openclaw:...`、`clawhub:...`、`skills.sh:...`），就从项目语义推导精确 public version 和 backing locator，再通过未认证公共 tag 恢复

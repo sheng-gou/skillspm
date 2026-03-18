@@ -4,12 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { loadLibrary, resolveCachedSkillPath } from "./library";
-import { loadLockfile } from "./lockfile";
-import { verifyLockedSkillPathIdentity } from "./lockfile";
+import { loadLockfile, verifyLockedSkillPathIdentity } from "./lockfile";
 import { loadManifest } from "./manifest";
 import { PACK_INTERNAL_MANIFEST_FILE, PACK_SKILLS_DIR } from "./pack";
 import type { ScopeLayout } from "./scope";
-import type { SkillsPackManifest } from "./types";
+import type { LibrarySkillSource, SkillsPackManifest } from "./types";
 import { copyDir, ensureDir, printSuccess, writeYamlDocument } from "./utils";
 import { CliError } from "./errors";
 
@@ -26,15 +25,21 @@ export async function packProject(layout: ScopeLayout, outFile: string): Promise
     throw new CliError("No skills.lock found. Run `skillspm install` or `skillspm freeze` first.", 2);
   }
 
+  const library = await loadLibrary(layout);
+  const manifestSourceLookup = new Map(manifest.skills.map((skill) => [skill.id, skill.source]));
   const packedManifest = {
-    skills: manifest.skills.map((skill) => ({
-      id: skill.id,
-      ...(lockfile.skills[skill.id] ? { version: lockfile.skills[skill.id].version } : skill.version ? { version: skill.version } : {})
-    })),
+    skills: manifest.skills.map((skill) => {
+      const locked = lockfile.skills[skill.id];
+      const persistedSource = resolvePackedSource(skill.source, locked ? library.skills[skill.id]?.versions[locked.version]?.source : undefined);
+      return {
+        id: skill.id,
+        ...(locked ? { version: locked.version } : skill.version ? { version: skill.version } : {}),
+        ...(persistedSource ? { source: persistedSource } : {})
+      };
+    }),
     ...(manifest.targets ? { targets: manifest.targets } : {})
   };
 
-  const library = await loadLibrary(layout);
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "skillspm-pack-build-"));
 
   try {
@@ -59,9 +64,11 @@ export async function packProject(layout: ScopeLayout, outFile: string): Promise
 
       const entryName = path.basename(sourcePath);
       await copyDir(sourcePath, path.join(tempRoot, PACK_SKILLS_DIR, entryName), { dereference: true });
+      const persistedSource = resolvePackedSource(manifestSourceLookup.get(skillId), library.skills[skillId]?.versions[version]?.source);
       packManifest.skills[skillId] = {
         version,
-        entry: entryName
+        entry: entryName,
+        ...(persistedSource ? { source: persistedSource } : {})
       };
     }
 
@@ -72,4 +79,8 @@ export async function packProject(layout: ScopeLayout, outFile: string): Promise
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+function resolvePackedSource(primary?: LibrarySkillSource, fallback?: LibrarySkillSource): LibrarySkillSource | undefined {
+  return primary ?? fallback;
 }

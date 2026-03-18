@@ -102,13 +102,15 @@ export async function bootstrapPublicProviderSkill(
       continue;
     }
 
+    const recordedSource = buildRecordedProviderLibrarySource(canonicalId, candidate);
     return {
       manifestSkill: {
         id: canonicalId,
-        version: resolvedVersion
+        version: resolvedVersion,
+        source: recordedSource
       },
       materializedPath: materialized.installPath,
-      source: buildRecordedProviderLibrarySource(canonicalId, candidate),
+      source: recordedSource,
       cleanup: async () => {}
     };
   }

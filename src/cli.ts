@@ -215,13 +215,14 @@ async function runInstallCommand(layout: ReturnType<typeof resolveScopeLayout>, 
   if (selection.kind === "manifest") {
     const rootDir = path.dirname(selection.path);
     const manifest = await loadManifestFromPath(selection.path);
-    await installProject({ ...layout, rootDir }, { manifest, lockfile: await loadLockfile(rootDir) });
+    const result = await installProject({ ...layout, rootDir }, { manifest, lockfile: await loadLockfile(rootDir) });
+    await saveManifest(rootDir, result.manifest);
     return;
   }
 
   const pack = await extractPack(selection.path);
   try {
-    await installProject(
+    const result = await installProject(
       { ...layout, rootDir: pack.rootDir },
       {
         manifest: pack.skillsManifest,
@@ -230,6 +231,8 @@ async function runInstallCommand(layout: ReturnType<typeof resolveScopeLayout>, 
         writeLockfile: false
       }
     );
+    await saveManifest(layout.rootDir, result.manifest);
+    await writeLockfile(layout.rootDir, result.lockfile);
   } finally {
     await pack.cleanup();
   }
@@ -351,7 +354,11 @@ async function addLocalSkill(
 
   return {
     id: skillId,
-    version
+    version,
+    source: {
+      kind: "local",
+      value: absolutePath
+    }
   };
 }
 
@@ -424,7 +431,7 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
       "  1. read desired skills from skills.yaml",
       "  2. use skills.lock to reproduce exact version+digest when available",
       "  3. reuse the machine-local library on exact match",
-      "  4. on cache miss, fall back to pack contents, then recorded local/target sources",
+      "  4. on cache miss, fall back to pack contents, then recorded manifest/library sources",
       "  5. locked provider provenance can re-materialize supported public provider-backed sources (github, openclaw, clawhub, skills.sh) on clean machines when resolved_from.type=provider and resolved_from.ref is a canonical github: id or anonymous https://github.com/... locator",
       "  6. recorded public provider provenance in library.yaml can still supply an exact backing locator for the same narrow public-provider cases",
       "  7. explicit public provider ids (github:, openclaw:, clawhub:, skills.sh:) with exact versions can otherwise re-materialize unauthenticated from public GitHub tag refs",

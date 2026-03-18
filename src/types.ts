@@ -1,6 +1,19 @@
+export interface LibrarySkillSourceProvider {
+  name: string;
+  ref?: string;
+  visibility?: string;
+}
+
+export interface LibrarySkillSource {
+  kind: "local" | "target" | "provider";
+  value: string;
+  provider?: LibrarySkillSourceProvider;
+}
+
 export interface ManifestSkill {
   id: string;
   version?: string;
+  source?: LibrarySkillSource;
 }
 
 export interface ManifestTarget {
@@ -61,18 +74,6 @@ export interface SkillsLock {
   skills: Record<string, LockedSkillEntry>;
 }
 
-export interface LibrarySkillSourceProvider {
-  name: string;
-  ref?: string;
-  visibility?: string;
-}
-
-export interface LibrarySkillSource {
-  kind: "local" | "target" | "provider";
-  value: string;
-  provider?: LibrarySkillSourceProvider;
-}
-
 export interface LibrarySkillVersion {
   path: string;
   cached_at: string;
@@ -94,6 +95,7 @@ export interface SkillsPackManifest {
   skills: Record<string, {
     version: string;
     entry: string;
+    source?: LibrarySkillSource;
   }>;
 }
 

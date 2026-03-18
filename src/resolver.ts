@@ -206,10 +206,11 @@ async function resolveMaterializedSkillPath(
       return {
         installPath: candidate,
         digest,
-        resolvedFrom: {
+        resolvedFrom: lockEntry?.resolved_from ?? {
           type: "pack",
           ref: packPath.entry
-        }
+        },
+        ...(resolvePackRecordedSource(context, skillId) ? { source: resolvePackRecordedSource(context, skillId) } : {})
       };
     }
     sourceFailures.push(`pack entry was declared but missing at ${candidate}`);
@@ -235,7 +236,7 @@ async function resolveMaterializedSkillPath(
     };
   }
 
-  const recordedProviderSource = await resolveRecordedLibraryProviderSourcePath(context, skillId, version);
+  const recordedProviderSource = await resolveRecordedProviderSourcePath(context, skillId, version);
   if (recordedProviderSource.installPath) {
     return recordedProviderSource;
   }
@@ -243,7 +244,7 @@ async function resolveMaterializedSkillPath(
     sourceFailures.push(recordedProviderSource.failureReason);
   }
 
-  const recordedLibrarySource = context.library.skills[skillId]?.versions[version]?.source;
+  const recordedLibrarySource = getRecordedSources(context, skillId, version).find((source) => source.kind === "provider");
   const projectFallbackFailure = getPublicGitHubProjectFallbackFailureReason(recordedLibrarySource);
   if (projectFallbackFailure) {
     return {
@@ -331,57 +332,58 @@ async function resolveRecordedPathSourcePath(
   skillId: string,
   version: string
 ): Promise<MaterializedSkillResolution> {
-  const source = context.library.skills[skillId]?.versions[version]?.source;
-  if (!source) {
+  const sources = getRecordedSources(context, skillId, version).filter((source) => source.kind !== "provider");
+  if (sources.length === 0) {
     return {
       failureReason: "no reusable source provenance recorded"
     };
   }
 
-  if (source.kind === "provider") {
-    return {};
-  }
+  const failures: string[] = [];
+  for (const source of sources) {
+    const sourcePath = resolveRecordedSourcePath(context, source);
+    if (!(await exists(sourcePath))) {
+      failures.push(`recorded ${source.kind} source path no longer exists: ${sourcePath}`);
+      continue;
+    }
 
-  if (!(await exists(source.value))) {
+    if (!(await isDirectory(sourcePath))) {
+      failures.push(`recorded ${source.kind} source path is not a directory: ${sourcePath}`);
+      continue;
+    }
+
+    try {
+      await assertSkillRootMarker(sourcePath, `Recorded ${source.kind} source for ${skillId}@${version}`);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : `recorded ${source.kind} source is not a valid skill root`);
+      continue;
+    }
+
+    const lockEntry = context.lockfile?.skills[skillId];
+    const digest = await verifyLockedPath(skillId, version, lockEntry, sourcePath, "Recorded source materialized content");
     return {
-      failureReason: `recorded ${source.kind} source path no longer exists: ${source.value}`
+      installPath: sourcePath,
+      digest,
+      resolvedFrom: {
+        type: source.kind,
+        ref: sourcePath
+      },
+      source
     };
   }
 
-  if (!(await isDirectory(source.value))) {
-    return {
-      failureReason: `recorded ${source.kind} source path is not a directory: ${source.value}`
-    };
-  }
-
-  try {
-    await assertSkillRootMarker(source.value, `Recorded ${source.kind} source for ${skillId}@${version}`);
-  } catch (error) {
-    return {
-      failureReason: error instanceof Error ? error.message : `recorded ${source.kind} source is not a valid skill root`
-    };
-  }
-
-  const lockEntry = context.lockfile?.skills[skillId];
-  const digest = await verifyLockedPath(skillId, version, lockEntry, source.value, "Recorded source materialized content");
   return {
-    installPath: source.value,
-    digest,
-    resolvedFrom: {
-      type: source.kind,
-      ref: source.value
-    },
-    source
+    failureReason: failures.join('; ')
   };
 }
 
-async function resolveRecordedLibraryProviderSourcePath(
+async function resolveRecordedProviderSourcePath(
   context: ResolveContext,
   skillId: string,
   version: string
 ): Promise<MaterializedSkillResolution> {
-  const source = context.library.skills[skillId]?.versions[version]?.source;
-  if (!source || source.kind !== "provider") {
+  const sources = getRecordedSources(context, skillId, version).filter((source) => source.kind === "provider");
+  if (sources.length === 0) {
     return {};
   }
 
@@ -392,32 +394,67 @@ async function resolveRecordedLibraryProviderSourcePath(
   }
 
   const layout = resolveScopeLayout(context.cwd);
-  const materialized = await materializeProviderSource(layout, skillId, version, source);
-  if (!materialized.installPath) {
-    return {
-      failureReason: materialized.failureReason
-    };
+  const failures: string[] = [];
+  for (const source of sources) {
+    const materialized = await materializeProviderSource(layout, skillId, version, source);
+    if (!materialized.installPath) {
+      failures.push(materialized.failureReason ?? `recorded provider source is insufficient for re-materialization: ${source.value}`);
+      continue;
+    }
+
+    try {
+      const lockEntry = context.lockfile?.skills[skillId];
+      const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Recorded provider materialized content");
+      const recoveredSource = source.provider?.name === "github" && !source.provider.ref
+        ? materialized.materializedSource ?? source
+        : buildRecordedProviderLibrarySource(skillId, materialized.materializedSource ?? source);
+      const lockedProviderRef = getLockedProviderRefForLibrarySource(recoveredSource) ?? source.value;
+      return {
+        installPath: materialized.installPath,
+        digest,
+        resolvedFrom: {
+          type: "provider",
+          ref: lockedProviderRef
+        },
+        source: recoveredSource
+      };
+    } catch (error) {
+      await rm(materialized.installPath, { recursive: true, force: true });
+      throw error;
+    }
   }
 
-  try {
-    const lockEntry = context.lockfile?.skills[skillId];
-    const digest = await verifyLockedPath(skillId, version, lockEntry, materialized.installPath, "Recorded provider materialized content");
-    const recoveredSource = source.provider?.name === "github" && !source.provider.ref
-      ? materialized.materializedSource ?? source
-      : buildRecordedProviderLibrarySource(skillId, materialized.materializedSource ?? source);
-    return {
-      installPath: materialized.installPath,
-      digest,
-      resolvedFrom: {
-        type: "provider",
-        ref: source.value
-      },
-      source: recoveredSource
-    };
-  } catch (error) {
-    await rm(materialized.installPath, { recursive: true, force: true });
-    throw error;
+  return {
+    failureReason: failures.join('; ')
+  };
+}
+
+function getRecordedSources(context: ResolveContext, skillId: string, version: string): LibrarySkillSource[] {
+  const sources: LibrarySkillSource[] = [];
+  const pushSource = (source?: LibrarySkillSource) => {
+    if (!source) {
+      return;
+    }
+    if (sources.some((entry) => JSON.stringify(entry) === JSON.stringify(source))) {
+      return;
+    }
+    sources.push(source);
+  };
+
+  pushSource(context.rootLookup.get(skillId)?.source);
+  pushSource(context.library.skills[skillId]?.versions[version]?.source);
+  return sources;
+}
+
+function resolvePackRecordedSource(context: ResolveContext, skillId: string): LibrarySkillSource | undefined {
+  return context.pack?.manifest.skills[skillId]?.source ?? context.rootLookup.get(skillId)?.source;
+}
+
+function resolveRecordedSourcePath(context: ResolveContext, source: LibrarySkillSource): string {
+  if (source.kind === "provider" || path.isAbsolute(source.value)) {
+    return source.value;
   }
+  return path.resolve(context.cwd, source.value);
 }
 
 async function resolvePublicGitHubProjectSourcePath(

@@ -14,13 +14,13 @@ Machine-local state lives in:
 - `~/.skillspm/library.yaml`
 - `~/.skillspm/skills/`
 
-`skills.yaml` is intentionally minimal: it keeps only the desired `skills` and optional `targets`.
+`skills.yaml` is intentionally minimal: it keeps only the desired `skills`, optional per-root `source`, and optional `targets`.
 
 `skills.lock` records the exact locked result identity for each skill: exact version, content digest, and resolution provenance.
 
 The machine-local library is not project truth. It is the local cache/materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
-`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded local/target sources on cache miss. Clean machines can also re-materialize public provider-backed sources from `skills.lock` when `resolved_from.type=provider` and `resolved_from.ref` is either a canonical `github:` locator or an anonymous public `https://github.com/...` locator. Recorded library provider provenance can keep the original provider id (`openclaw:...`, `clawhub:...`, `skills.sh:...`) while persisting the backing public GitHub locator used for re-materialization. Canonical public `github:` skills and provider-backed public skills remain recoverable through unauthenticated public tag fetches. Recovered provider skill roots must be symlink-free. Digest mismatches fail closed instead of silently accepting drift.
+`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded manifest/library sources on cache miss. Clean machines can also re-materialize public provider-backed sources from `skills.lock` when `resolved_from.type=provider` and `resolved_from.ref` is either a canonical `github:` locator or an anonymous public `https://github.com/...` locator. Recorded provider provenance can keep the original provider id (`openclaw:...`, `clawhub:...`, `skills.sh:...`) while persisting the backing public GitHub locator used for re-materialization. Canonical public `github:` skills and provider-backed public skills remain recoverable through unauthenticated public tag fetches. Recovered provider skill roots must be symlink-free. Digest mismatches fail closed instead of silently accepting drift.
 
 Provider recovery is still intentionally narrow in this branch: clean-machine fallback only covers public GitHub-backed providers (`github`, `openclaw`, `clawhub`, `skills.sh`) and only through unauthenticated access. `skills.sh:` ids resolve through their public GitHub repo/path semantics; `openclaw:` / `clawhub:` ids resolve through public provider metadata and then pin to a public GitHub backing locator. The recovery path disables credential helpers, askpass hooks, and terminal prompting so private/authenticated GitHub access fails closed honestly. Private repos, authenticated provider flows, non-public visibility, and plain git inputs still require an existing cache entry or a pack.
 
@@ -58,6 +58,9 @@ Recorded public GitHub provider provenance may also use an anonymous public GitH
 skills:
   - id: local/example
     version: 0.1.0
+    source:
+      kind: local
+      value: ./skills/local-example
   - id: github:owner/repo/skill
     version: ^1.2.0
 targets:
@@ -124,7 +127,7 @@ skillspm add clawhub:example/skill --install
 skillspm add skills.sh:owner/repo/skill --install
 ```
 
-For local paths, `add` materializes the skill into `~/.skillspm/library.yaml` and `~/.skillspm/skills/`, then writes only `id` and `version` into `skills.yaml`.
+For local paths, `add` materializes the skill into `~/.skillspm/library.yaml` and `~/.skillspm/skills/`, and it also persists the minimal reusable `source` block into `skills.yaml` so later installs can re-materialize on cache miss without assuming prior local library state.
 
 ## `adopt` and `sync`
 
@@ -139,7 +142,7 @@ skillspm sync claude_code
 skillspm sync openclaw,codex
 ```
 
-`adopt` can also take a local directory path instead of a target name. When the source is a local path or known target, that source path is recorded in the machine-local library so later installs can recover from cache misses.
+`adopt` can also take a local directory path instead of a target name. When the source is a local path or known target, that source path is recorded in both project `skills.yaml` and the machine-local library so later installs can recover from cache misses on a clean library as long as the source path still exists.
 
 ## `install` input precedence
 
@@ -157,7 +160,7 @@ After choosing the input, `install` processes each skill in this order:
 2. use `skills.lock` to reproduce exact version+digest when present
 3. reuse the machine-local library on exact content match
 4. on cache miss, fall back to pack contents
-5. on pack miss, fall back to recorded local/target source paths
+5. on pack miss, fall back to recorded manifest/library source paths (local, target, or supported public-provider provenance)
 6. if `skills.lock` recorded `resolved_from.type=provider` with a canonical public `github:` id or anonymous public `https://github.com/...` locator, try that lockfile-backed public recovery first
 7. otherwise, if `library.yaml` recorded public provider provenance, use that provenance on cache miss (`github` can keep an exact ref; `openclaw` / `clawhub` / `skills.sh` keep the original provider id plus a backing public GitHub locator)
 8. otherwise, if the skill id itself is a supported public provider id (`github:...`, `openclaw:...`, `clawhub:...`, `skills.sh:...`), infer an exact public version and backing locator from project semantics, then recover through unauthenticated public tag fetches

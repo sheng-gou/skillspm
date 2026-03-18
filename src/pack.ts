@@ -117,6 +117,37 @@ function validatePackManifest(value: unknown, sourceLabel: string): SkillsPackMa
     if (typeof entry.entry !== "string") {
       errors.push(`skills.${skillId}.entry must be a string`);
     }
+    if ("source" in entry && entry.source !== undefined) {
+      if (!entry.source || typeof entry.source !== "object" || Array.isArray(entry.source)) {
+        errors.push(`skills.${skillId}.source must be an object`);
+      } else {
+        const source = entry.source as { kind?: unknown; value?: unknown; provider?: unknown };
+        if (typeof source.kind !== "string") {
+          errors.push(`skills.${skillId}.source.kind must be a string`);
+        } else if (!["local", "target", "provider"].includes(source.kind)) {
+          errors.push(`skills.${skillId}.source.kind must be one of: local, target, provider`);
+        }
+        if (typeof source.value !== "string") {
+          errors.push(`skills.${skillId}.source.value must be a string`);
+        }
+        if ("provider" in source && source.provider !== undefined) {
+          if (!source.provider || typeof source.provider !== "object" || Array.isArray(source.provider)) {
+            errors.push(`skills.${skillId}.source.provider must be an object`);
+          } else {
+            const provider = source.provider as { name?: unknown; ref?: unknown; visibility?: unknown };
+            if (typeof provider.name !== "string") {
+              errors.push(`skills.${skillId}.source.provider.name must be a string`);
+            }
+            if ("ref" in provider && provider.ref !== undefined && typeof provider.ref !== "string") {
+              errors.push(`skills.${skillId}.source.provider.ref must be a string`);
+            }
+            if ("visibility" in provider && provider.visibility !== undefined && typeof provider.visibility !== "string") {
+              errors.push(`skills.${skillId}.source.provider.visibility must be a string`);
+            }
+          }
+        }
+      }
+    }
   }
 
   if (errors.length > 0) {

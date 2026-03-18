@@ -1,13 +1,16 @@
 import path from "node:path";
 import semver from "semver";
 import { CliError } from "./errors";
-import type { ManifestSkill, ManifestTarget, SkillsManifest } from "./types";
+import type { LibrarySkillSource, ManifestSkill, ManifestTarget, SkillsManifest } from "./types";
 import { MANIFEST_FILE, ensureDir, exists, readDocument, writeYamlDocument } from "./utils";
 
 const SUPPORTED_RANGE_PATTERN = /^(?:\d+\.\d+\.\d+|\^\d+\.\d+\.\d+|~\d+\.\d+\.\d+|unversioned)$/;
 const ALLOWED_MANIFEST_KEYS = new Set(["skills", "targets"]);
-const ALLOWED_SKILL_KEYS = new Set(["id", "version"]);
+const ALLOWED_SKILL_KEYS = new Set(["id", "version", "source"]);
 const ALLOWED_TARGET_KEYS = new Set(["type", "enabled", "path"]);
+const ALLOWED_LIBRARY_SOURCE_KINDS = new Set<LibrarySkillSource["kind"]>(["local", "target", "provider"]);
+const ALLOWED_SOURCE_KEYS = new Set(["kind", "value", "provider"]);
+const ALLOWED_PROVIDER_KEYS = new Set(["name", "ref", "visibility"]);
 
 export function isSupportedVersionRange(value: string): boolean {
   if (value === "unversioned") {
@@ -64,7 +67,7 @@ function validateManifestSkill(skill: Partial<ManifestSkill>, errors: string[]):
   }
   for (const key of Object.keys(skill as Record<string, unknown>)) {
     if (!ALLOWED_SKILL_KEYS.has(key)) {
-      errors.push(`skill ${skill.id ?? "<unknown>"} has unknown key ${key}; allowed keys: id, version`);
+      errors.push(`skill ${skill.id ?? "<unknown>"} has unknown key ${key}; allowed keys: id, version, source`);
     }
   }
   if (!skill.id || typeof skill.id !== "string") {
@@ -75,6 +78,52 @@ function validateManifestSkill(skill: Partial<ManifestSkill>, errors: string[]):
       errors.push(`skill ${skill.id ?? "<unknown>"} version must be a string`);
     } else if (!isSupportedVersionRange(skill.version)) {
       errors.push(`skill ${skill.id ?? "<unknown>"} version must be exact, caret, tilde, or unversioned`);
+    }
+  }
+  if (skill.source !== undefined) {
+    validateManifestSkillSource(`skill ${skill.id ?? "<unknown>"}.source`, skill.source, errors);
+  }
+}
+
+function validateManifestSkillSource(label: string, source: unknown, errors: string[]): void {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    errors.push(`${label} must be an object with kind and value strings`);
+    return;
+  }
+
+  const raw = source as { kind?: unknown; value?: unknown; provider?: unknown } & Record<string, unknown>;
+  for (const key of Object.keys(raw)) {
+    if (!ALLOWED_SOURCE_KEYS.has(key)) {
+      errors.push(`${label} has unknown key ${key}; allowed keys: kind, value, provider`);
+    }
+  }
+  if (typeof raw.kind !== "string") {
+    errors.push(`${label}.kind must be a string`);
+  } else if (!ALLOWED_LIBRARY_SOURCE_KINDS.has(raw.kind as LibrarySkillSource["kind"])) {
+    errors.push(`${label}.kind must be one of: local, target, provider`);
+  }
+  if (typeof raw.value !== "string") {
+    errors.push(`${label}.value must be a string`);
+  }
+  if ("provider" in raw && raw.provider !== undefined) {
+    if (!raw.provider || typeof raw.provider !== "object" || Array.isArray(raw.provider)) {
+      errors.push(`${label}.provider must be an object`);
+      return;
+    }
+    const provider = raw.provider as { name?: unknown; ref?: unknown; visibility?: unknown } & Record<string, unknown>;
+    for (const key of Object.keys(provider)) {
+      if (!ALLOWED_PROVIDER_KEYS.has(key)) {
+        errors.push(`${label}.provider has unknown key ${key}; allowed keys: name, ref, visibility`);
+      }
+    }
+    if (typeof provider.name !== "string") {
+      errors.push(`${label}.provider.name must be a string`);
+    }
+    if ("ref" in provider && provider.ref !== undefined && typeof provider.ref !== "string") {
+      errors.push(`${label}.provider.ref must be a string`);
+    }
+    if ("visibility" in provider && provider.visibility !== undefined && typeof provider.visibility !== "string") {
+      errors.push(`${label}.provider.visibility must be a string`);
     }
   }
 }
@@ -116,13 +165,25 @@ export async function saveManifest(cwd: string, manifest: SkillsManifest): Promi
   await ensureDir(path.dirname(manifestPath));
   const validated = validateManifest(manifest);
   await writeYamlDocument(manifestPath, {
-    skills: validated.skills.map((skill) => (
-      skill.version === undefined
-        ? { id: skill.id }
-        : { id: skill.id, version: skill.version }
-    )),
+    skills: validated.skills.map((skill) => formatManifestSkill(skill)),
     ...(validated.targets === undefined ? {} : { targets: validated.targets })
   });
+}
+
+function formatManifestSkill(skill: ManifestSkill): Record<string, unknown> {
+  return {
+    id: skill.id,
+    ...(skill.version === undefined ? {} : { version: skill.version }),
+    ...(skill.source === undefined
+      ? {}
+      : {
+          source: {
+            kind: skill.source.kind,
+            value: skill.source.value,
+            ...(skill.source.provider ? { provider: skill.source.provider } : {})
+          }
+        })
+  };
 }
 
 export function createDefaultManifest(): SkillsManifest {
