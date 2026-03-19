@@ -1,5 +1,7 @@
 # skillspm
 
+![SkillsPM social preview](./docs/social-preview.jpg)
+
 The source of truth is skills.yaml.
 
 Install from it, freeze it, and sync it across agents and projects.

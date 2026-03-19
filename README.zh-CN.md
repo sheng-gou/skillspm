@@ -1,5 +1,7 @@
 # skillspm
 
+![SkillsPM social preview](./docs/social-preview.jpg)
+
 以 `skills.yaml` 作为唯一事实来源。
 
 围绕它执行 install、freeze，并在不同 agent 与项目之间 sync。
