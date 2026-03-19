@@ -1,30 +1,185 @@
 # skillspm
 
+The source of truth is skills.yaml.
+
+Install from it, freeze it, and sync it across agents and projects.
+
+Build reproducible, portable Skills environments for your agents.
+
 `skillspm` manages declarative Skills environments with a minimal project manifest, an exact lockfile, and a machine-local materialization cache.
 
-## 0.3.0 model
+## What you can do with skillspm
 
-Project truth lives in:
+### Case 1: Reproduce an environment from project truth
 
-- `skills.yaml`
-- `skills.lock`
+Keep the desired environment in `skills.yaml`, run `skillspm install`, and let the lockfile plus local cache reproduce exact materialized skills when available.
+
+### Case 2: Lock the exact result identity you want to keep
+
+Use `skillspm freeze` when you intentionally want to record the exact resolved version, digest, and provenance for each skill in `skills.lock`.
+
+### Case 3: Sync one locked environment across agents and projects
+
+Use `skillspm sync <target>` to push the currently locked skills into configured targets without treating those targets as the source of truth.
+
+### Case 4: Carry a portable pack for private, offline, or cross-machine recovery
+
+Use `skillspm pack` to bundle the current locked environment into a `.skillspm.tgz` file for transport and recovery when cache or public recovery paths are not enough.
+
+### Case 5: Bring existing skills under management
+
+Use `skillspm add <content>` for local paths, GitHub inputs, and provider-backed ids, or `skillspm adopt [source]` to merge existing target contents into `skills.yaml`.
+
+### Case 6: Mix local, target, and supported public-provider sources honestly
+
+`skillspm` can recover from persisted sources, but the clean-machine public recovery boundary is intentionally narrow: only public GitHub-backed providers are covered, only through unauthenticated access, and digest mismatches fail closed.
+
+## Quick start
+
+Minimal `skills.yaml`:
+
+```yaml
+skills:
+  - id: local/example
+    version: 0.1.0
+    source:
+      kind: local
+      value: ./skills/local-example
+targets:
+  - type: openclaw
+```
+
+Then run the core lifecycle:
+
+```bash
+skillspm install
+skillspm freeze
+skillspm sync openclaw
+skillspm pack
+```
+
+What this proves:
+
+- `install` materializes the declared environment from `skills.yaml`
+- `freeze` records exact locked result identity in `skills.lock`
+- `sync` updates configured agent targets from the locked environment
+- `pack` creates a portable recovery bundle for private/local/offline use
+
+## Common workflows
+
+### Set up this repository or any checked-in Skills project
+
+```bash
+skillspm install
+skillspm doctor --json
+```
+
+If configured targets should be updated:
+
+```bash
+skillspm sync openclaw
+```
+
+### Add or migrate a skill into the environment
+
+```bash
+skillspm add ./skills/my-skill
+skillspm install
+skillspm freeze
+```
+
+Mixed-source examples are supported, but they are still persisted back into the same project truth:
+
+```bash
+skillspm add owner/repo/skill --provider github
+skillspm add example/skill --provider openclaw
+skillspm add https://github.com/owner/repo/tree/main/skills/my-skill
+```
+
+### Adopt existing target contents into project truth
+
+```bash
+skillspm adopt openclaw
+skillspm install
+```
+
+### Prepare a shareable pack
+
+```bash
+skillspm install
+skillspm freeze
+skillspm pack dist/team-env.skillspm.tgz
+```
+
+## Core commands
+
+- `skillspm add <content>`: add a local path, GitHub input, or provider-backed id into `skills.yaml`
+- `skillspm install [input]`: materialize the declared environment from `skills.yaml` or a pack
+- `skillspm pack [out]`: bundle the current locked environment into a portable `.skillspm.tgz`
+- `skillspm freeze`: rewrite `skills.lock` with exact locked result identity
+- `skillspm adopt [source]`: discover existing skills and merge them into `skills.yaml`
+- `skillspm sync [target]`: sync locked skills from the local library cache to one or more targets
+- `skillspm doctor`: check manifest, lockfile, cache, pack readiness, targets, and conflicts
+- `skillspm help [command]`: show command help
+
+## `skills.yaml`
+
+`skills.yaml` is the source of truth for the desired environment.
+
+It is intentionally minimal: it keeps desired `skills`, optional per-root `source`, and optional `targets`.
+
+Example:
+
+```yaml
+skills:
+  - id: local/example
+    version: 0.1.0
+    source:
+      kind: local
+      value: ./skills/local-example
+  - id: github:owner/repo/skill
+    version: ^1.2.0
+targets:
+  - type: openclaw
+  - type: generic
+    path: ./agent-skills
+```
+
+## `skills.lock`
+
+`skills.lock` stores the exact locked result identity for the environment.
+
+It records exact version, content digest, and resolution provenance under its `skills` map.
+
+Example:
+
+```yaml
+schema: skills-lock/v3
+skills:
+  local/example:
+    version: 0.1.0
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    resolved_from:
+      type: local
+      ref: ./skills/local-example
+  "github:owner/repo/skill":
+    version: 1.2.3
+    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
+    resolved_from:
+      type: pack
+      ref: github__owner__repo__skill@1.2.3
+```
+
+## Machine-local library
 
 Machine-local state lives in:
 
 - `~/.skillspm/library.yaml`
 - `~/.skillspm/skills/`
 
-`skills.yaml` is intentionally minimal: it keeps only the desired `skills`, optional per-root `source`, and optional `targets`.
-
-`skills.lock` records the exact locked result identity for each skill: exact version, content digest, and resolution provenance.
-
 The machine-local library is not project truth. It is the local cache/materialization layer used by `install`, `pack`, `adopt`, and `sync`.
 
-`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded manifest/library sources on cache miss. Clean machines can also re-materialize public provider-backed sources from `skills.lock` when `resolved_from.type=provider` and `resolved_from.ref` is either a canonical `github:` locator or an anonymous public `https://github.com/...` locator. Recorded provider provenance can keep the original provider id (`openclaw:...`, `clawhub:...`, `skills.sh:...`) while persisting the backing public GitHub locator used for re-materialization. Canonical public `github:` skills and provider-backed public skills remain recoverable through unauthenticated public tag fetches. Recovered provider skill roots must be symlink-free. Digest mismatches fail closed instead of silently accepting drift.
-
-Provider recovery is still intentionally narrow in this branch: clean-machine fallback only covers public GitHub-backed providers (`github`, `openclaw`, `clawhub`, `skills.sh`) and only through unauthenticated access. `skills.sh:` ids resolve through their public GitHub repo/path semantics; `openclaw:` / `clawhub:` ids resolve through public provider metadata and then pin to a public GitHub backing locator. The recovery path disables credential helpers, askpass hooks, and terminal prompting so private/authenticated GitHub access fails closed honestly. Private repos, authenticated provider flows, non-public visibility, and plain git inputs still require an existing cache entry or a pack.
-
-When a machine-local provider entry is available, it can still record either a direct GitHub provenance record or a provider-preserving record in `~/.skillspm/library.yaml`:
+When a machine-local provider entry is available, it can record either direct GitHub provenance or a provider-preserving record in `~/.skillspm/library.yaml`:
 
 ```yaml
 source:
@@ -50,56 +205,36 @@ source:
 
 Recorded public GitHub provider provenance may also use an anonymous public GitHub URL as either `source.value` (for `github`) or `source.provider.ref` (for provider-preserving records), for example `https://github.com/owner/repo/tree/main/skills/demo`. URL-embedded credentials are not supported.
 
-`skillspm pack` is a transport and recovery supplement for private, local, offline, or cross-machine workflows. It does not redefine the source model or replace `skills.yaml`/`skills.lock` as project truth.
+## Pack
 
-## Manifest
+`skillspm pack` is a core transport and recovery capability for private, local, offline, and cross-machine workflows.
 
-```yaml
-skills:
-  - id: local/example
-    version: 0.1.0
-    source:
-      kind: local
-      value: ./skills/local-example
-  - id: github:owner/repo/skill
-    version: ^1.2.0
-targets:
-  - type: openclaw
-  - type: generic
-    path: ./agent-skills
-```
+A `.skillspm.tgz` pack contains:
 
-## Lockfile
+- `skills.yaml`
+- `skills.lock`
+- internal `manifest.yaml`
+- `skills/` with exact cached skill payloads
 
-```yaml
-schema: skills-lock/v3
-skills:
-  local/example:
-    version: 0.1.0
-    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
-    resolved_from:
-      type: local
-      ref: ./skills/local-example
-  "github:owner/repo/skill":
-    version: 1.2.3
-    digest: sha256:2222222222222222222222222222222222222222222222222222222222222222
-    resolved_from:
-      type: pack
-      ref: github__owner__repo__skill@1.2.3
-```
+`manifest.yaml` is internal pack metadata, not user-facing environment truth.
 
-## Public commands
+Packs supplement the normal install flow. They do not redefine the source model or replace `skills.yaml` / `skills.lock` as project truth.
 
-- `skillspm add <content>`
-- `skillspm install [input]`
-- `skillspm pack [out]`
-- `skillspm freeze`
-- `skillspm adopt [source]`
-- `skillspm sync [target]`
-- `skillspm doctor`
-- `skillspm help [command]`
+## Recovery boundary
 
-## Unified `add` entrypoint
+`skillspm install` reads `skills.yaml`, consults `skills.lock` when present, checks the machine-local library for an exact content match, and only falls back to pack contents or recorded manifest/library sources on cache miss.
+
+Clean machines can also re-materialize public provider-backed sources from `skills.lock` when `resolved_from.type=provider` and `resolved_from.ref` is either a canonical `github:` locator or an anonymous public `https://github.com/...` locator.
+
+Recorded provider provenance can keep the original provider id (`openclaw:...`, `clawhub:...`, `skills.sh:...`) while persisting the backing public GitHub locator used for re-materialization. Canonical public `github:` skills and provider-backed public skills remain recoverable through unauthenticated public tag fetches.
+
+Recovered provider skill roots must be symlink-free. Digest mismatches fail closed instead of silently accepting drift.
+
+Provider recovery is still intentionally narrow in this branch: clean-machine fallback only covers public GitHub-backed providers (`github`, `openclaw`, `clawhub`, `skills.sh`) and only through unauthenticated access. `skills.sh:` ids resolve through their public GitHub repo/path semantics; `openclaw:` / `clawhub:` ids resolve through public provider metadata and then pin to a public GitHub backing locator. The recovery path disables credential helpers, askpass hooks, and terminal prompting so private/authenticated GitHub access fails closed honestly. Private repos, authenticated provider flows, non-public visibility, and plain git inputs still require an existing cache entry or a pack.
+
+## Current 0.3.0 contract
+
+### Unified `add` entrypoint
 
 `skillspm add <content>` auto-detects input in this order:
 
@@ -129,22 +264,7 @@ skillspm add skills.sh:owner/repo/skill --install
 
 For local paths, `add` materializes the skill into `~/.skillspm/library.yaml` and `~/.skillspm/skills/`, and it also persists the minimal reusable `source` block into `skills.yaml` so later installs can re-materialize on cache miss without assuming prior local library state.
 
-## `adopt` and `sync`
-
-`adopt` and `sync` use a direct target-object UX.
-
-Examples:
-
-```bash
-skillspm adopt openclaw
-skillspm adopt openclaw,codex
-skillspm sync claude_code
-skillspm sync openclaw,codex
-```
-
-`adopt` can also take a local directory path instead of a target name. When the source is a local path or known target, that source path is recorded in both project `skills.yaml` and the machine-local library so later installs can recover from cache misses on a clean library as long as the source path still exists.
-
-## `install` input precedence
+### `install` input precedence
 
 `skillspm install` selects input in this order:
 
@@ -167,20 +287,30 @@ After choosing the input, `install` processes each skill in this order:
 9. reject the recovery if any symlink exists anywhere under the recovered provider skill root
 10. fail closed on digest mismatch instead of silently accepting drift
 
-## Pack format
+### `adopt` and `sync`
 
-A `.skillspm.tgz` pack contains:
+`adopt` and `sync` use a direct target-object UX.
 
-- `skills.yaml`
-- `skills.lock`
-- internal `manifest.yaml`
-- `skills/` with exact cached skill payloads
+Examples:
 
-`manifest.yaml` is internal pack metadata, not user-facing environment truth.
+```bash
+skillspm adopt openclaw
+skillspm adopt openclaw,codex
+skillspm sync claude_code
+skillspm sync openclaw,codex
+```
 
-Packs are for transport, private/local/offline distribution, and recovery. They supplement the normal install flow; they are not a new persistent source type.
+`adopt` can also take a local directory path instead of a target name. When the source is a local path or known target, that source path is recorded in both project `skills.yaml` and the machine-local library so later installs can recover from cache misses on a clean library as long as the source path still exists.
 
-## Doctor scope
+`skillspm sync` writes the currently locked skills into configured agent targets.
+
+By default it is non-destructive:
+
+- it updates the locked skill entries it manages
+- it does not prune unrelated or unmanaged target contents
+- it fails closed before writing if a resolved target path escapes its allowed containment root
+
+### Doctor scope
 
 `skillspm doctor` explicitly checks:
 
@@ -192,23 +322,3 @@ Packs are for transport, private/local/offline distribution, and recovery. They 
 - project/global manifest conflicts
 
 Use `skillspm doctor --json` for machine-readable diagnostics.
-
-## Sync behavior
-
-`skillspm sync` writes the currently locked skills into configured agent targets.
-
-By default it is non-destructive:
-
-- it updates the locked skill entries it manages
-- it does not prune unrelated or unmanaged target contents
-- it fails closed before writing if a resolved target path escapes its allowed containment root
-
-## Typical flow
-
-```bash
-skillspm add ./skills/my-skill
-skillspm install
-skillspm doctor
-skillspm sync openclaw
-skillspm freeze
-```

@@ -4,9 +4,12 @@ This repository uses `skillspm` to manage a declarative Skills environment.
 
 ## 0.3.0 contract
 
-Project truth lives in:
+Desired environment truth lives in:
 
 - `skills.yaml`
+
+Exact locked result identity lives in:
+
 - `skills.lock`
 
 Machine-local state lives in:

@@ -2,11 +2,14 @@
 
 This repository uses `skillspm` to manage a declarative Skills environment.
 
-## 0.3.0 model in one view
+## 0.3.0 contract in one view
 
-Project truth lives in:
+Desired environment truth lives in:
 
 - `skills.yaml`
+
+Exact locked result identity lives in:
+
 - `skills.lock`
 
 Machine-local state lives in:
@@ -16,7 +19,7 @@ Machine-local state lives in:
 
 In short:
 
-- `skills.yaml` = desired environment, with desired `skills`, optional per-root `source`, and optional `targets`
+- `skills.yaml` = source of truth for the desired environment, with desired `skills`, optional per-root `source`, and optional `targets`
 - `skills.lock` = exact locked result identity: version, digest, and resolved-from provenance
 - `~/.skillspm/*` = machine-local cache/materialization used by `install`, `pack`, `adopt`, and `sync`
 
