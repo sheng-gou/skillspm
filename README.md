@@ -8,7 +8,7 @@ Install from it, freeze it, and sync it across agents and projects.
 
 Build reproducible, portable Skills environments for your agents.
 
-`skillspm` manages declarative Skills environments with a minimal project manifest, an exact lockfile, and a machine-local materialization cache.
+`skillspm` helps teams build stable Skills environments they can reproduce, sync, and restore.
 
 ## What you can do with skillspm
 
@@ -32,9 +32,9 @@ Use `skillspm pack` to bundle the current locked environment into a `.skillspm.t
 
 Use `skillspm add <content>` for local paths, GitHub inputs, and provider-backed ids, or `skillspm adopt [source]` to merge existing target contents into `skills.yaml`.
 
-### Case 6: Mix local, target, and supported public-provider sources honestly
+### Case 6: Use mixed sources without hiding the recovery boundary
 
-`skillspm` can recover from persisted sources, but the clean-machine public recovery boundary is intentionally narrow: only public GitHub-backed providers are covered, only through unauthenticated access, and digest mismatches fail closed.
+`skillspm` can recover from persisted sources, but it stays honest about where that recovery stops: on clean machines, public recovery is intentionally narrow, covering only public GitHub-backed providers through unauthenticated access, with digest mismatches failing closed.
 
 ## Quick start
 

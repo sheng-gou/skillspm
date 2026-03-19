@@ -8,7 +8,7 @@
 
 为你的 agent 构建可复现、可移植的 Skills 环境。
 
-`skillspm` 用最小化项目清单、精确 lockfile 和机器本地物化缓存来管理声明式 Skills 环境。
+`skillspm` 帮助团队构建稳定的 Skills 环境，让它们可以被复现、同步和恢复。
 
 ## 你可以用 skillspm 做什么
 
@@ -32,9 +32,9 @@
 
 使用 `skillspm add <content>` 处理本地路径、GitHub 输入和 provider-backed id，或者用 `skillspm adopt [source]` 把现有 target 内容合并进 `skills.yaml`。
 
-### 场景 6：诚实地管理 mixed-source 环境
+### 场景 6：在不掩盖恢复边界的前提下使用 mixed-source 环境
 
-`skillspm` 支持从持久化 source 恢复环境，但干净机器上的 public recovery 边界是刻意收窄的：只覆盖 public GitHub-backed provider，只允许未认证访问，而且 digest 不匹配时会 fail closed。
+`skillspm` 支持从持久化 source 恢复环境，但会诚实说明恢复能力的边界：在干净机器上，public recovery 被刻意收窄为只覆盖 public GitHub-backed provider，只允许未认证访问，而且 digest 不匹配时会 fail closed。
 
 ## 快速开始
 
