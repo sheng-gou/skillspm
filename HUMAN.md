@@ -16,9 +16,11 @@ Machine-local state lives in:
 
 In short:
 
-- `skills.yaml` = desired environment, with only `skills` and optional `targets`
+- `skills.yaml` = desired environment, with desired `skills`, optional per-root `source`, and optional `targets`
 - `skills.lock` = exact locked result identity: version, digest, and resolved-from provenance
 - `~/.skillspm/*` = machine-local cache/materialization used by `install`, `pack`, `adopt`, and `sync`
+
+This is a self-sufficient install-from-persisted-sources model: `install` prefers lock/cache first, then falls back to pack contents or recorded manifest/library sources when it must re-materialize.
 
 The cache is not the source of truth for the project.
 
@@ -49,7 +51,7 @@ skillspm add owner/repo/skill --provider github
 skillspm add example/skill --provider openclaw
 ```
 
-For local paths, `add` copies the skill into the machine-local library and writes only `id` and `version` into `skills.yaml`.
+For local paths, `add` materializes the skill into the machine-local library and also writes the minimal reusable `source` block into `skills.yaml` alongside `id` and `version` so later installs can re-materialize on cache miss without assuming prior local library state.
 
 ### `skillspm install [input]`
 
@@ -69,8 +71,14 @@ Install order is:
 2. use `skills.lock` to reproduce exact version+digest when present
 3. reuse the machine-local library on exact match
 4. on cache miss, fall back to pack contents
-5. on pack miss, fall back to recorded local/target source paths
-6. fail closed on digest mismatch instead of silently accepting drift
+5. on pack miss, fall back to recorded manifest/library source paths (local, target, or supported public-provider provenance)
+6. if `skills.lock` recorded `resolved_from.type=provider` with a canonical public `github:` id or anonymous public `https://github.com/...` locator, try that lockfile-backed public recovery first
+7. otherwise, if `library.yaml` recorded public provider provenance, use that provenance on cache miss (`github` can keep an exact ref; `openclaw` / `clawhub` / `skills.sh` keep the original provider id plus a backing public GitHub locator)
+8. otherwise, if the skill id itself is a supported public provider id (`github:...`, `openclaw:...`, `clawhub:...`, `skills.sh:...`), infer an exact public version and backing locator from project semantics, then recover through unauthenticated public tag fetches
+9. reject the recovery if any symlink exists anywhere under the recovered provider skill root
+10. fail closed on digest mismatch instead of silently accepting drift
+
+Public provider recovery is intentionally narrow here: only public GitHub-backed providers (`github`, `openclaw`, `clawhub`, `skills.sh`) are recoverable this way, only through unauthenticated access. Private repos, authenticated provider flows, non-public visibility, and plain git inputs still require an existing cache entry or a pack.
 
 ### `skillspm pack [out]`
 
@@ -161,7 +169,7 @@ skillspm freeze
 
 Defines the desired Skills environment for the project.
 
-Keep only root `skills` and optional `targets` here.
+Keep root `skills`, optional per-root `source`, and optional `targets` here.
 
 ### `skills.lock`
 
@@ -188,4 +196,4 @@ If you change command behavior or user-facing workflow, keep these files aligned
 
 ## In one sentence
 
-Think of `skillspm` as a reproducible Skills environment manager centered on a minimal `skills.yaml`, an exact `skills.lock`, and a machine-local cache/materialization layer under `~/.skillspm/`.
+Think of `skillspm` as a reproducible Skills environment manager centered on a minimal `skills.yaml` (including persisted `source` where needed), an exact `skills.lock`, and a machine-local cache/materialization layer under `~/.skillspm/`.
