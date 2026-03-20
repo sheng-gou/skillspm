@@ -5,6 +5,7 @@ import { syncTargets } from "./adapter";
 import { runDoctor } from "./doctor";
 import { CliError } from "./errors";
 import { importSkills } from "./importer";
+import { runInspect } from "./inspect";
 import { installProject } from "./installer";
 import { cacheSkill, loadLibrary } from "./library";
 import { buildLockfileFromNodes, loadLockfile, writeLockfile } from "./lockfile";
@@ -14,6 +15,7 @@ import { packProject } from "./packer";
 import { bootstrapPublicProviderSkill, canonicalizePublicGitHubLocator } from "./provider";
 import { resolveProject } from "./resolver";
 import { formatScopeLabel, resolveScopeLayout } from "./scope";
+import { getConfirmedStateRequirementError, getInstallStateNotice, inspectProjectState, isConfirmedProjectState } from "./state";
 import { loadSkillMetadata } from "./skill";
 import type { ManifestSkill, SkillsManifest } from "./types";
 import {
@@ -41,8 +43,8 @@ interface AddSkillOptions {
   bootstrapRemote?: boolean;
 }
 
-const PUBLIC_COMMANDS = ["add", "install", "pack", "freeze", "adopt", "sync", "doctor", "help"] as const;
-const REMOVED_PUBLIC_COMMANDS = new Set(["import", "inspect"]);
+const PUBLIC_COMMANDS = ["add", "inspect", "install", "pack", "freeze", "adopt", "sync", "doctor", "help"] as const;
+const REMOVED_PUBLIC_COMMANDS = new Set(["import"]);
 
 export async function runCli(argv: string[]): Promise<number> {
   try {
@@ -93,8 +95,18 @@ export async function runCli(argv: string[]): Promise<number> {
 
     withScopeOption(
       program
+        .command("inspect")
+        .description("Explain the current intent, confirmed state, drift, and next safe actions")
+        .option("--json", "Emit a machine-readable state snapshot")
+    ).action(async (options: { json?: boolean; global?: boolean }) => {
+      const layout = resolveScopeLayout(process.cwd(), options.global);
+      await runInspect(layout, { json: options.json });
+    });
+
+    withScopeOption(
+      program
         .command("install")
-        .description("Read skills.yaml, reproduce locked identities when available, and reuse local materializations safely")
+        .description("Consume confirmed state by default, while still materializing current intent locally when unconfirmed")
         .argument("[input]", "Explicit path to skills.yaml or *.skillspm.tgz")
     ).action(async (inputOrOptions: string | { global?: boolean } | undefined, options?: { global?: boolean }) => {
       const input = typeof inputOrOptions === "string" ? inputOrOptions : undefined;
@@ -106,12 +118,17 @@ export async function runCli(argv: string[]): Promise<number> {
     withScopeOption(
       program
         .command("pack")
-        .description("Bundle the current locked environment into a portable supplement for offline or cross-machine recovery")
+        .description("Bundle the confirmed environment into a portable restore supplement for offline or cross-machine recovery")
         .argument("[out]", "Output .skillspm.tgz file")
     ).action(async (outOrOptions: string | { global?: boolean } | undefined, options?: { global?: boolean }) => {
       const out = typeof outOrOptions === "string" ? outOrOptions : undefined;
       const normalizedOptions = typeof outOrOptions === "string" ? options ?? {} : outOrOptions ?? {};
       const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
+      const state = await inspectProjectState(layout);
+      const gateError = getConfirmedStateRequirementError(state, "pack");
+      if (gateError) {
+        throw new CliError(gateError, 2);
+      }
       const outFile = await normalizePackOutputPath(process.cwd(), out ?? `${path.basename(layout.rootDir)}.skillspm.tgz`);
       await packProject(layout, outFile);
     });
@@ -119,7 +136,7 @@ export async function runCli(argv: string[]): Promise<number> {
     withScopeOption(
       program
         .command("freeze")
-        .description("Rewrite skills.lock with exact locked result identity from the current resolution")
+        .description("Explicitly refresh skills.lock to the accepted current result")
     ).action(async (options: { global?: boolean }) => {
       const layout = resolveScopeLayout(process.cwd(), options.global);
       const resolution = await resolveProject(layout.rootDir);
@@ -161,13 +178,18 @@ export async function runCli(argv: string[]): Promise<number> {
     withScopeOption(
       program
         .command("sync")
-        .description("Sync locked skills from the machine-local library to targets")
+        .description("Sync the confirmed environment from the machine-local library to targets")
         .argument("[target]", "Target type or comma-separated target types")
         .option("--mode <mode>", "Sync mode: copy or symlink")
     ).action(async (targetOrOptions: string | { mode?: string; global?: boolean } | undefined, options?: { mode?: string; global?: boolean }) => {
       const target = typeof targetOrOptions === "string" ? targetOrOptions : undefined;
       const normalizedOptions = typeof targetOrOptions === "string" ? options ?? {} : targetOrOptions ?? {};
       const layout = resolveScopeLayout(process.cwd(), normalizedOptions.global);
+      const state = await inspectProjectState(layout);
+      const gateError = getConfirmedStateRequirementError(state, "sync");
+      if (gateError) {
+        throw new CliError(gateError, 2);
+      }
       const manifest = await loadManifest(layout.rootDir);
       const targets = parseCommaSeparatedValues(target);
       if (targets.length === 0) {
@@ -215,8 +237,21 @@ async function runInstallCommand(layout: ReturnType<typeof resolveScopeLayout>, 
   if (selection.kind === "manifest") {
     const rootDir = path.dirname(selection.path);
     const manifest = await loadManifestFromPath(selection.path);
-    const result = await installProject({ ...layout, rootDir }, { manifest, lockfile: await loadLockfile(rootDir) });
+    const lockfile = await loadLockfile(rootDir);
+    const state = await inspectProjectState({ ...layout, rootDir });
+    const result = await installProject(
+      { ...layout, rootDir },
+      {
+        manifest,
+        lockfile,
+        writeLockfile: isConfirmedProjectState(state)
+      }
+    );
     await saveManifest(rootDir, result.manifest);
+    const installNotice = getInstallStateNotice(state);
+    if (installNotice) {
+      printInfo(installNotice);
+    }
     return;
   }
 
@@ -267,7 +302,10 @@ async function selectInstallInput(
     throw new CliError("Multiple local *.skillspm.tgz files found. Pass the pack path explicitly.", 2);
   }
 
-  throw new CliError("No install input found. Pass skills.yaml or a *.skillspm.tgz pack, or run inside a project with skills.yaml.", 2);
+  throw new CliError(
+    "No install input found. Pass skills.yaml or a *.skillspm.tgz pack, run inside a project with skills.yaml, or create project intent with `skillspm add <path-or-id>` first.",
+    2
+  );
 }
 
 async function listLocalPacks(cwd: string): Promise<string[]> {
@@ -416,11 +454,28 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
       "  -g, --global           Use ~/.skillspm/global instead of the current project"
     ].join("\n");
   }
+  if (commandName === "inspect") {
+    return [
+      "Usage: skillspm inspect [options]",
+      "",
+      "Explain the current intent, confirmed state, drift, and next safe actions",
+      "",
+      "State labels:",
+      "  Uninitialized         No skills.yaml intent is present yet",
+      "  Development           skills.yaml exists but skills.lock does not",
+      "  Drifted Development   skills.yaml changed since the last confirmed skills.lock",
+      "  Confirmed             skills.yaml and skills.lock are aligned",
+      "",
+      "Options:",
+      "  --json            Emit a machine-readable state snapshot",
+      "  -g, --global      Use ~/.skillspm/global instead of the current project"
+    ].join("\n");
+  }
   if (commandName === "install") {
     return [
       "Usage: skillspm install [input] [options]",
       "",
-      "Read skills.yaml, consult skills.lock when present, and reuse exact local materializations safely",
+      "Consume confirmed state by default, while still materializing current intent locally when unconfirmed",
       "",
       "Install input precedence:",
       "  1. explicit path to skills.yaml or *.skillspm.tgz",
@@ -438,6 +493,10 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
       "  8. provider recovery rejects symlinks anywhere under the recovered skill root before caching",
       "  9. fail closed on digest mismatch instead of silently accepting drift",
       "",
+      "Confirmation behavior:",
+      "  Manifest-based install materializes Development and Drifted Development states without creating or rewriting skills.lock.",
+      "  Use `skillspm freeze` to confirm a reviewed result.",
+      "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"
     ].join("\n");
@@ -446,7 +505,8 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     return [
       "Usage: skillspm pack [out] [options]",
       "",
-      "Bundle the current locked environment into a portable supplement for private, local, offline, or recovery workflows",
+      "Bundle the confirmed environment into a portable supplement for private, local, offline, or recovery workflows",
+      "Requires a Confirmed project state; refuses in Development or Drifted Development.",
       "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"
@@ -456,7 +516,7 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     return [
       "Usage: skillspm freeze [options]",
       "",
-      "Rewrite skills.lock with exact version, digest, and resolution provenance from the current result",
+      "Explicitly refresh skills.lock with exact version, digest, and resolution provenance from the accepted current result",
       "",
       "Options:",
       "  -g, --global      Use ~/.skillspm/global instead of the current project"
@@ -481,7 +541,8 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     return [
       "Usage: skillspm sync [target] [options]",
       "",
-      "Sync locked skills from the machine-local library to targets",
+      "Sync the confirmed environment from the machine-local library to targets",
+      "Requires a Confirmed project state; refuses in Development or Drifted Development.",
       "",
       "Examples:",
       "  skillspm sync openclaw",
@@ -521,16 +582,18 @@ function renderHelp(commandName?: (typeof PUBLIC_COMMANDS)[number]): string {
     "",
     "Public commands:",
     "  add               Unified add <content> entrypoint for local paths, GitHub URLs, and provider-backed skill ids",
-    "  install           Read skills.yaml, reproduce locked identities when available, and reuse local materializations safely",
-    "  pack              Bundle the current locked environment into a portable recovery supplement",
-    "  freeze            Rewrite skills.lock with exact locked result identity",
+    "  inspect           Explain current state, drift, and next safe actions",
+    "  install           Consume confirmed state by default, while still materializing intent locally when unconfirmed",
+    "  pack              Bundle the confirmed environment into a portable recovery supplement",
+    "  freeze            Explicitly refresh skills.lock to the accepted current result",
     "  adopt             Discover existing skills and merge them into skills.yaml from [source]",
-    "  sync              Sync locked skills from the machine-local library to [target]",
+    "  sync              Sync the confirmed environment from the machine-local library to [target]",
     "  doctor            Check manifest, lockfile, library, pack, targets, and project/global conflicts",
     "  help              Show top-level or command-specific help",
     "",
     "Examples:",
     "  skillspm add ./skills/my-skill --install",
+    "  skillspm inspect",
     "  skillspm add owner/repo/skill --provider github",
     "  skillspm adopt openclaw",
     "  skillspm sync claude_code",

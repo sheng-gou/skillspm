@@ -8,6 +8,7 @@ import { loadLockfile, verifyLockedSkillPathIdentity } from "./lockfile";
 import { loadManifest } from "./manifest";
 import { PACK_INTERNAL_MANIFEST_FILE, PACK_SKILLS_DIR } from "./pack";
 import type { ScopeLayout } from "./scope";
+import { getConfirmedStateRequirementError, inspectProjectState, isConfirmedProjectState } from "./state";
 import type { LibrarySkillSource, SkillsPackManifest } from "./types";
 import { copyDir, ensureDir, printSuccess, writeYamlDocument } from "./utils";
 import { CliError } from "./errors";
@@ -19,6 +20,11 @@ export interface PackProjectResult {
 }
 
 export async function packProject(layout: ScopeLayout, outFile: string): Promise<PackProjectResult> {
+  const snapshot = await inspectProjectState(layout);
+  if (!isConfirmedProjectState(snapshot)) {
+    throw new CliError(getConfirmedStateRequirementError(snapshot, "pack") ?? "Pack requires a confirmed project state.", 2);
+  }
+
   const manifest = await loadManifest(layout.rootDir);
   const lockfile = await loadLockfile(layout.rootDir);
   if (!lockfile) {

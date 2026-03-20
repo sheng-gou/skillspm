@@ -6,6 +6,7 @@ import { loadLockfile } from "./lockfile";
 import { verifyLockedSkillPathIdentity } from "./lockfile";
 import { CliError } from "./errors";
 import type { ScopeLayout } from "./scope";
+import { getConfirmedStateRequirementError, inspectProjectState, isConfirmedProjectState } from "./state";
 import type { InstallMode, ManifestTarget, SkillsManifest, TargetType } from "./types";
 import { assertConfiguredPathWithinRootReal, assertPathWithinRootReal, copyDir, ensureDir } from "./utils";
 
@@ -51,6 +52,11 @@ export function resolveDefaultTargetPath(type: TargetType): string | undefined {
 }
 
 export async function syncTargets(layout: ScopeLayout, manifest: SkillsManifest, options: SyncOptions = {}): Promise<void> {
+  const snapshot = await inspectProjectState(layout);
+  if (!isConfirmedProjectState(snapshot)) {
+    throw new CliError(getConfirmedStateRequirementError(snapshot, "sync") ?? "Sync requires a confirmed project state.", 2);
+  }
+
   const lockfile = await loadLockfile(layout.rootDir);
   if (!lockfile) {
     throw new CliError("No skills.lock found. Run `skillspm install` or `skillspm freeze` first.", 2);

@@ -39,6 +39,7 @@ NODE
 
 # Help surface
 "${CLI[@]}" help add > "$TMPDIR/help-add.txt"
+"${CLI[@]}" help inspect > "$TMPDIR/help-inspect.txt"
 "${CLI[@]}" help install > "$TMPDIR/help-install.txt"
 "${CLI[@]}" help pack > "$TMPDIR/help-pack.txt"
 "${CLI[@]}" help freeze > "$TMPDIR/help-freeze.txt"
@@ -46,10 +47,13 @@ NODE
 "${CLI[@]}" help sync > "$TMPDIR/help-sync.txt"
 "${CLI[@]}" help doctor > "$TMPDIR/help-doctor.txt"
 assert_file_contains "$TMPDIR/help-add.txt" "skillspm add <content>"
+assert_file_contains "$TMPDIR/help-inspect.txt" "skillspm inspect"
+assert_file_contains "$TMPDIR/help-inspect.txt" "Drifted Development"
 assert_file_contains "$TMPDIR/help-install.txt" "skills.lock"
 assert_file_contains "$TMPDIR/help-install.txt" "unauthenticated"
 assert_file_contains "$TMPDIR/help-install.txt" "rejects symlinks"
 assert_file_contains "$TMPDIR/help-install.txt" "digest mismatch"
+assert_file_contains "$TMPDIR/help-install.txt" "without creating or rewriting skills.lock"
 assert_file_contains "$TMPDIR/help-pack.txt" "portable supplement"
 assert_file_contains "$TMPDIR/help-freeze.txt" "version, digest, and resolution provenance"
 assert_file_contains "$TMPDIR/help-add.txt" "--provider <provider>"
@@ -57,6 +61,19 @@ assert_file_contains "$TMPDIR/help-add.txt" "Choose the provider"
 assert_file_contains "$TMPDIR/help-adopt.txt" "skillspm adopt openclaw"
 assert_file_contains "$TMPDIR/help-sync.txt" "skillspm sync openclaw,codex"
 assert_file_contains "$TMPDIR/help-doctor.txt" "project/global conflicts"
+
+INSPECT_UNINITIALIZED_PROJECT="$TMPDIR/inspect-uninitialized-project"
+mkdir -p "$INSPECT_UNINITIALIZED_PROJECT"
+(
+  cd "$INSPECT_UNINITIALIZED_PROJECT"
+  "${CLI[@]}" inspect > "$TMPDIR/inspect-uninitialized.txt"
+  "${CLI[@]}" inspect --json > "$TMPDIR/inspect-uninitialized.json"
+)
+assert_file_contains "$TMPDIR/inspect-uninitialized.txt" "Project state: Uninitialized"
+assert_file_contains "$TMPDIR/inspect-uninitialized.txt" "No project intent"
+assert_node "const [report] = docs; return report.state === 'uninitialized' && report.manifestPresent === false && report.lockPresent === false && report.alignment === 'unavailable' && report.nextActions.some((action) => action.command === 'skillspm add <path-or-id>');" "$TMPDIR/inspect-uninitialized.json"
+[ ! -e "$INSPECT_UNINITIALIZED_PROJECT/skills.yaml" ]
+[ ! -d "$HOME/.skillspm" ]
 
 # Unified add: local, explicit provider choice, GitHub URL, provider-backed
 ADD_PROJECT="$TMPDIR/add-project"
@@ -200,6 +217,56 @@ assert_node "const [manifest, library] = docs; const root = manifest.skills[0]; 
 [ -f "$LOCAL_INSTALL_PROJECT/skills.lock" ]
 assert_node "const [lockfile] = docs; const entry = lockfile.skills['local/example']; return lockfile.schema === 'skills-lock/v3' && entry.version === '1.2.3' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'local' && entry.resolved_from.ref.endsWith('/local-skill');" "$LOCAL_INSTALL_PROJECT/skills.lock"
 [ -d "$HOME/.skillspm/skills/local__example@1.2.3" ]
+(
+  cd "$LOCAL_INSTALL_PROJECT"
+  "${CLI[@]}" inspect > "$TMPDIR/inspect-confirmed.txt"
+  "${CLI[@]}" inspect --json > "$TMPDIR/inspect-confirmed.json"
+)
+assert_file_contains "$TMPDIR/inspect-confirmed.txt" "Project state: Confirmed"
+assert_file_contains "$TMPDIR/inspect-confirmed.txt" "confirmed reproducible state"
+assert_node "const [report] = docs; return report.state === 'confirmed' && report.manifestPresent === true && report.lockPresent === true && report.alignment === 'aligned' && report.manifestSkillCount === 1 && report.lockSkillCount === 1 && report.nextActions.some((action) => action.command === 'skillspm sync');" "$TMPDIR/inspect-confirmed.json"
+
+INSPECT_SIDE_EFFECT_HOME="$TMPDIR/inspect-side-effect-home"
+INSPECT_SIDE_EFFECT_PROJECT="$TMPDIR/inspect-side-effect-project"
+mkdir -p "$INSPECT_SIDE_EFFECT_HOME" "$INSPECT_SIDE_EFFECT_PROJECT/inspect-skill"
+cat > "$INSPECT_SIDE_EFFECT_PROJECT/inspect-skill/skill.yaml" <<'YAML'
+id: inspect/example
+version: 5.6.7
+YAML
+cat > "$INSPECT_SIDE_EFFECT_PROJECT/inspect-skill/SKILL.md" <<'EOF_SKILL'
+# Inspect side effect skill
+EOF_SKILL
+cat > "$INSPECT_SIDE_EFFECT_PROJECT/skills.yaml" <<YAML
+skills:
+  - id: inspect/example
+    version: 5.6.7
+    source:
+      kind: local
+      value: $INSPECT_SIDE_EFFECT_PROJECT/inspect-skill
+YAML
+cat > "$INSPECT_SIDE_EFFECT_PROJECT/skills.lock" <<YAML
+schema: skills-lock/v3
+skills:
+  inspect/example:
+    version: 5.6.7
+    digest: sha256:1111111111111111111111111111111111111111111111111111111111111111
+    resolved_from:
+      type: local
+      ref: $INSPECT_SIDE_EFFECT_PROJECT/inspect-skill
+YAML
+SIDE_EFFECT_BEFORE_MANIFEST=$(sha256sum "$INSPECT_SIDE_EFFECT_PROJECT/skills.yaml" | awk '{print $1}')
+SIDE_EFFECT_BEFORE_LOCK=$(sha256sum "$INSPECT_SIDE_EFFECT_PROJECT/skills.lock" | awk '{print $1}')
+(
+  cd "$INSPECT_SIDE_EFFECT_PROJECT"
+  HOME="$INSPECT_SIDE_EFFECT_HOME" "${CLI[@]}" inspect > "$TMPDIR/inspect-side-effect.txt"
+  HOME="$INSPECT_SIDE_EFFECT_HOME" "${CLI[@]}" inspect --json > "$TMPDIR/inspect-side-effect.json"
+)
+SIDE_EFFECT_AFTER_MANIFEST=$(sha256sum "$INSPECT_SIDE_EFFECT_PROJECT/skills.yaml" | awk '{print $1}')
+SIDE_EFFECT_AFTER_LOCK=$(sha256sum "$INSPECT_SIDE_EFFECT_PROJECT/skills.lock" | awk '{print $1}')
+test "$SIDE_EFFECT_BEFORE_MANIFEST" = "$SIDE_EFFECT_AFTER_MANIFEST"
+test "$SIDE_EFFECT_BEFORE_LOCK" = "$SIDE_EFFECT_AFTER_LOCK"
+[ ! -e "$INSPECT_SIDE_EFFECT_HOME/.skillspm" ]
+assert_node "const [report] = docs; return report.state === 'confirmed' && report.lockPresent === true && report.manifestPresent === true;" "$TMPDIR/inspect-side-effect.json"
 
 EXPLICIT_MANIFEST_PATH_HOME="$TMPDIR/explicit-manifest-path-home"
 EXPLICIT_MANIFEST_PATH_PROJECT="$TMPDIR/explicit-manifest-path-project"
@@ -219,12 +286,43 @@ skills:
     source:
       kind: local
       value: ./relative-skill
+targets:
+  - type: generic
+    path: ./development-target
 YAML
 (
   cd "$EXPLICIT_MANIFEST_PATH_RUN_CWD"
-  HOME="$EXPLICIT_MANIFEST_PATH_HOME" "${CLI[@]}" install "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.yaml"
+  HOME="$EXPLICIT_MANIFEST_PATH_HOME" "${CLI[@]}" install "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.yaml" > "$TMPDIR/install-development.out"
 )
-assert_node "const [manifest, lockfile] = docs; const root = manifest.skills[0]; const entry = lockfile.skills['local/relative-manifest']; return root.source.kind === 'local' && root.source.value === './relative-skill' && entry.version === '9.8.7' && entry.resolved_from.type === 'local' && entry.resolved_from.ref === '$EXPLICIT_MANIFEST_PATH_PROJECT/relative-skill';" "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.yaml" "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.lock"
+[ ! -f "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.lock" ]
+assert_file_contains "$TMPDIR/install-development.out" "skills.lock was not written"
+assert_file_contains "$TMPDIR/install-development.out" "remains in Development"
+assert_node "const [manifest, library] = docs; const root = manifest.skills[0]; const entry = library.skills['local/relative-manifest'].versions['9.8.7']; return root.source.kind === 'local' && root.source.value === './relative-skill' && entry.source.kind === 'local' && entry.source.value === './relative-skill' && entry.path.endsWith('/local__relative-manifest@9.8.7');" "$EXPLICIT_MANIFEST_PATH_PROJECT/skills.yaml" "$EXPLICIT_MANIFEST_PATH_HOME/.skillspm/library.yaml"
+(
+  cd "$EXPLICIT_MANIFEST_PATH_PROJECT"
+  HOME="$EXPLICIT_MANIFEST_PATH_HOME" "${CLI[@]}" inspect > "$TMPDIR/inspect-no-lock.txt"
+  HOME="$EXPLICIT_MANIFEST_PATH_HOME" "${CLI[@]}" inspect --json > "$TMPDIR/inspect-no-lock.json"
+)
+assert_file_contains "$TMPDIR/inspect-no-lock.txt" "Project state: Development"
+assert_file_contains "$TMPDIR/inspect-no-lock.txt" "no confirmed state"
+assert_node "const [report] = docs; return report.state === 'development' && report.manifestPresent === true && report.lockPresent === false && report.manifestSkillCount === 1 && report.alignment === 'unavailable' && report.nextActions.some((action) => action.command === 'skillspm freeze');" "$TMPDIR/inspect-no-lock.json"
+(
+  cd "$EXPLICIT_MANIFEST_PATH_PROJECT"
+  set +e
+  HOME="$EXPLICIT_MANIFEST_PATH_HOME" "${CLI[@]}" sync generic > "$TMPDIR/development-sync.out" 2> "$TMPDIR/development-sync.err"
+  sync_status=$?
+  HOME="$EXPLICIT_MANIFEST_PATH_HOME" "${CLI[@]}" pack "$TMPDIR/development.skillspm.tgz" > "$TMPDIR/development-pack.out" 2> "$TMPDIR/development-pack.err"
+  pack_status=$?
+  set -e
+  test "$sync_status" -ne 0
+  test "$pack_status" -ne 0
+)
+grep -Fq "Refusing to sync from Development" "$TMPDIR/development-sync.err"
+grep -Fq 'skillspm freeze' "$TMPDIR/development-sync.err"
+grep -Fq "Refusing to pack from Development" "$TMPDIR/development-pack.err"
+grep -Fq 'skillspm freeze' "$TMPDIR/development-pack.err"
+[ ! -e "$EXPLICIT_MANIFEST_PATH_PROJECT/development-target" ]
+[ ! -e "$TMPDIR/development.skillspm.tgz" ]
 
 CACHE_PRIORITY_PROJECT="$TMPDIR/cache-priority-project"
 mkdir -p "$CACHE_PRIORITY_PROJECT/cache-skill"
@@ -291,6 +389,7 @@ EOF_SKILL
   cd "$PACK_PROVENANCE_SOURCE"
   "${CLI[@]}" add ./local-skill
   "${CLI[@]}" install
+  "${CLI[@]}" freeze
   "${CLI[@]}" pack "$TMPDIR/pack-provenance.skillspm.tgz"
 )
 PACK_PROVENANCE_HOME="$TMPDIR/pack-provenance-home"
@@ -390,6 +489,64 @@ grep -Fq "cache lookup failed:" "$TMPDIR/fail-install.err"
 grep -Fq "source resolution failed:" "$TMPDIR/fail-install.err"
 grep -Fq "no reusable source provenance recorded" "$TMPDIR/fail-install.err"
 
+LEGACY_SOURCE_GAP_PROJECT="$TMPDIR/legacy-source-gap-project"
+mkdir -p "$LEGACY_SOURCE_GAP_PROJECT/legacy-skill"
+cat > "$LEGACY_SOURCE_GAP_PROJECT/legacy-skill/skill.yaml" <<'YAML'
+id: legacy/source-gap
+version: 1.0.0
+YAML
+cat > "$LEGACY_SOURCE_GAP_PROJECT/legacy-skill/SKILL.md" <<'EOF_SKILL'
+# Legacy source gap
+EOF_SKILL
+printf 'legacy\n' > "$LEGACY_SOURCE_GAP_PROJECT/legacy-skill/materialization.txt"
+cat > "$LEGACY_SOURCE_GAP_PROJECT/skills.yaml" <<'YAML'
+skills:
+  - id: legacy/source-gap
+    version: 1.0.0
+    source:
+      kind: local
+      value: ./legacy-skill
+targets:
+  - type: generic
+    path: ./legacy-target
+YAML
+cat > "$LEGACY_SOURCE_GAP_PROJECT/skills.lock" <<'YAML'
+schema: skills-lock/v2
+skills:
+  legacy/source-gap: 1.0.0
+YAML
+cp "$LEGACY_SOURCE_GAP_PROJECT/skills.lock" "$TMPDIR/legacy-source-gap-before-install.lock"
+
+(
+  cd "$LEGACY_SOURCE_GAP_PROJECT"
+  "${CLI[@]}" inspect > "$TMPDIR/inspect-legacy-source-gap.txt"
+  "${CLI[@]}" inspect --json > "$TMPDIR/inspect-legacy-source-gap.json"
+  "${CLI[@]}" install > "$TMPDIR/install-legacy-source-gap.out"
+  "${CLI[@]}" inspect --json > "$TMPDIR/inspect-legacy-source-gap-after-install.json"
+  set +e
+  "${CLI[@]}" sync generic > "$TMPDIR/legacy-source-gap-sync.out" 2> "$TMPDIR/legacy-source-gap-sync.err"
+  sync_status=$?
+  "${CLI[@]}" pack "$TMPDIR/legacy-source-gap.skillspm.tgz" > "$TMPDIR/legacy-source-gap-pack.out" 2> "$TMPDIR/legacy-source-gap-pack.err"
+  pack_status=$?
+  set -e
+  test "$sync_status" -ne 0
+  test "$pack_status" -ne 0
+)
+
+assert_file_contains "$TMPDIR/inspect-legacy-source-gap.txt" "Project state: Drifted Development"
+assert_file_contains "$TMPDIR/inspect-legacy-source-gap.txt" "skills.yaml and skills.lock diverge"
+assert_file_contains "$TMPDIR/inspect-legacy-source-gap.txt" "Source drift could not be fully verified"
+assert_node "const [report] = docs; const gap = report.drift.sourceVerificationUnavailable.find((entry) => entry.id === 'legacy/source-gap'); return report.state === 'drifted' && report.alignment === 'drifted' && report.drift.versionMismatches.length === 0 && report.drift.sourceMismatches.length === 0 && Boolean(gap && gap.intentSource.startsWith('local:') && gap.intentSource.endsWith('/legacy-skill'));" "$TMPDIR/inspect-legacy-source-gap.json"
+assert_file_contains "$TMPDIR/install-legacy-source-gap.out" "skills.lock was not rewritten"
+cmp -s "$TMPDIR/legacy-source-gap-before-install.lock" "$LEGACY_SOURCE_GAP_PROJECT/skills.lock"
+assert_node "const [report] = docs; return report.state === 'drifted' && report.alignment === 'drifted' && report.drift.sourceVerificationUnavailable.some((entry) => entry.id === 'legacy/source-gap');" "$TMPDIR/inspect-legacy-source-gap-after-install.json"
+grep -Fq "Refusing to sync from Drifted Development" "$TMPDIR/legacy-source-gap-sync.err"
+grep -Fq 'skillspm inspect' "$TMPDIR/legacy-source-gap-sync.err"
+grep -Fq "Refusing to pack from Drifted Development" "$TMPDIR/legacy-source-gap-pack.err"
+grep -Fq 'skillspm freeze' "$TMPDIR/legacy-source-gap-pack.err"
+[ ! -e "$LEGACY_SOURCE_GAP_PROJECT/legacy-target" ]
+[ ! -e "$TMPDIR/legacy-source-gap.skillspm.tgz" ]
+
 STALE_LOCK_INSTALL_PROJECT="$TMPDIR/stale-lock-install-project"
 mkdir -p "$STALE_LOCK_INSTALL_PROJECT/skill-v1" "$STALE_LOCK_INSTALL_PROJECT/skill-v2"
 cat > "$STALE_LOCK_INSTALL_PROJECT/skill-v1/skill.yaml" <<'YAML'
@@ -413,12 +570,51 @@ printf 'v2\n' > "$STALE_LOCK_INSTALL_PROJECT/skill-v2/materialization.txt"
   cd "$STALE_LOCK_INSTALL_PROJECT"
   "${CLI[@]}" add ./skill-v1
   "${CLI[@]}" install
-  "${CLI[@]}" add ./skill-v2
-  "${CLI[@]}" install
+  "${CLI[@]}" freeze
+  cp skills.lock "$TMPDIR/stale-lock-before-install.lock"
+  cat > skills.yaml <<'YAML'
+skills:
+  - id: stale/install
+    version: 2.0.0
+    source:
+      kind: local
+      value: ./skill-v2
+targets:
+  - type: generic
+    path: ./drift-target
+YAML
+  "${CLI[@]}" inspect > "$TMPDIR/inspect-drifted.txt"
+  "${CLI[@]}" inspect --json > "$TMPDIR/inspect-drifted.json"
+  "${CLI[@]}" install > "$TMPDIR/install-drifted.out"
+  set +e
+  "${CLI[@]}" sync generic > "$TMPDIR/drifted-sync.out" 2> "$TMPDIR/drifted-sync.err"
+  sync_status=$?
+  "${CLI[@]}" pack "$TMPDIR/drifted.skillspm.tgz" > "$TMPDIR/drifted-pack.out" 2> "$TMPDIR/drifted-pack.err"
+  pack_status=$?
+  set -e
+  test "$sync_status" -ne 0
+  test "$pack_status" -ne 0
 )
 
-assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['stale/install']; return manifest.skills.length === 1 && manifest.skills[0].id === 'stale/install' && manifest.skills[0].version === '2.0.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'local' && entry.resolved_from.ref.endsWith('/skill-v2');" "$STALE_LOCK_INSTALL_PROJECT/skills.yaml" "$STALE_LOCK_INSTALL_PROJECT/skills.lock"
+assert_file_contains "$TMPDIR/inspect-drifted.txt" "Project state: Drifted Development"
+assert_file_contains "$TMPDIR/inspect-drifted.txt" "skills.yaml and skills.lock diverge"
+assert_file_contains "$TMPDIR/inspect-drifted.txt" "stale/install wants 2.0.0"
+assert_file_contains "$TMPDIR/install-drifted.out" "skills.lock was not rewritten"
+assert_file_contains "$TMPDIR/install-drifted.out" "stale relative to skills.yaml"
+DRIFT_DETAILS_LINE=$(grep -n '^Details:$' "$TMPDIR/inspect-drifted.txt" | cut -d: -f1)
+DRIFT_ACTIONS_LINE=$(grep -n '^Next safe actions:$' "$TMPDIR/inspect-drifted.txt" | cut -d: -f1)
+DRIFT_INTERNAL_LINE=$(grep -n '^Internal details:$' "$TMPDIR/inspect-drifted.txt" | cut -d: -f1)
+[ "$DRIFT_DETAILS_LINE" -lt "$DRIFT_ACTIONS_LINE" ]
+[ "$DRIFT_ACTIONS_LINE" -lt "$DRIFT_INTERNAL_LINE" ]
+assert_node "const [report] = docs; return report.state === 'drifted' && report.manifestPresent === true && report.lockPresent === true && report.alignment === 'drifted' && report.drift.versionMismatches.some((entry) => entry.id === 'stale/install' && entry.intentVersion === '2.0.0' && entry.confirmedVersion === '1.0.0') && report.nextActions.some((action) => action.command === 'skillspm freeze');" "$TMPDIR/inspect-drifted.json"
+assert_node "const [beforeLock, afterLock, manifest] = docs; const before = beforeLock.skills['stale/install']; const after = afterLock.skills['stale/install']; return manifest.skills.length === 1 && manifest.skills[0].id === 'stale/install' && manifest.skills[0].version === '2.0.0' && before.version === '1.0.0' && after.version === '1.0.0' && before.digest === after.digest && before.resolved_from.ref === after.resolved_from.ref;" "$TMPDIR/stale-lock-before-install.lock" "$STALE_LOCK_INSTALL_PROJECT/skills.lock" "$STALE_LOCK_INSTALL_PROJECT/skills.yaml"
 grep -Fxq "v2" "$HOME/.skillspm/skills/stale__install@2.0.0/materialization.txt"
+grep -Fq "Refusing to sync from Drifted Development" "$TMPDIR/drifted-sync.err"
+grep -Fq 'skillspm inspect' "$TMPDIR/drifted-sync.err"
+grep -Fq "Refusing to pack from Drifted Development" "$TMPDIR/drifted-pack.err"
+grep -Fq 'skillspm freeze' "$TMPDIR/drifted-pack.err"
+[ ! -e "$STALE_LOCK_INSTALL_PROJECT/drift-target" ]
+[ ! -e "$TMPDIR/drifted.skillspm.tgz" ]
 
 STALE_LOCK_FREEZE_PROJECT="$TMPDIR/stale-lock-freeze-project"
 mkdir -p "$STALE_LOCK_FREEZE_PROJECT/skill-v1" "$STALE_LOCK_FREEZE_PROJECT/skill-v2"
@@ -464,6 +660,7 @@ printf 'original\n' > "$DIGEST_FAIL_PROJECT/digest-skill/materialization.txt"
   cd "$DIGEST_FAIL_PROJECT"
   "${CLI[@]}" add ./digest-skill
   "${CLI[@]}" install
+  "${CLI[@]}" freeze
 )
 
 printf 'tampered\n' > "$HOME/.skillspm/skills/digest__example@4.5.6/materialization.txt"
@@ -641,6 +838,7 @@ printf 'clawhub\n' > "$CLAWHUB_WORKTREE/skills/provider-demo/materialization.txt
   SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
   SKILLSPM_TEST_SKILLS_SH_BASE_URL="$PROVIDER_SKILLS_SH_BASE_URL" \
   "${CLI[@]}" add skills.sh:acme/demo-skill --install
+  HOME="$PROVIDER_BOOTSTRAP_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [manifest, lockfile] = docs; const root = manifest.skills[0]; const entry = lockfile.skills['skills.sh:acme/demo-skill']; return manifest.skills.length === 1 && root.id === 'skills.sh:acme/demo-skill' && root.version === '1.5.0' && root.source.kind === 'provider' && root.source.value === 'skills.sh:acme/demo-skill' && root.source.provider.name === 'skills.sh' && root.source.provider.ref === 'github:example/skills-sh-skill/skills/demo-skill' && lockfile.schema === 'skills-lock/v3' && entry.version === '1.5.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/skills-sh-skill/skills/demo-skill';" "$PROVIDER_SKILLS_SH_PROJECT/skills.yaml" "$PROVIDER_SKILLS_SH_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['skills.sh:acme/demo-skill'].versions['1.5.0']; return entry.source.kind === 'provider' && entry.source.value === 'skills.sh:acme/demo-skill' && entry.source.provider.name === 'skills.sh' && entry.source.provider.ref === 'github:example/skills-sh-skill/skills/demo-skill' && entry.source.provider.visibility === 'public';" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/library.yaml"
@@ -652,6 +850,7 @@ grep -Fxq "skills-sh" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/skills/skills.sh_acme_
   SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
   SKILLSPM_TEST_OPENCLAW_BASE_URL="$PROVIDER_OPENCLAW_BASE_URL" \
   "${CLI[@]}" add openclaw:example/provider-demo --install
+  HOME="$PROVIDER_BOOTSTRAP_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [manifest, lockfile] = docs; const root = manifest.skills[0]; const entry = lockfile.skills['openclaw:example/provider-demo']; return manifest.skills.length === 1 && root.id === 'openclaw:example/provider-demo' && root.version === '2.1.0' && root.source.kind === 'provider' && root.source.value === 'openclaw:example/provider-demo' && root.source.provider.name === 'openclaw' && root.source.provider.ref === 'github:example/openclaw-skill/skills/provider-demo' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.1.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/openclaw-skill/skills/provider-demo';" "$PROVIDER_OPENCLAW_PROJECT/skills.yaml" "$PROVIDER_OPENCLAW_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['openclaw:example/provider-demo'].versions['2.1.0']; return entry.source.kind === 'provider' && entry.source.value === 'openclaw:example/provider-demo' && entry.source.provider.name === 'openclaw' && entry.source.provider.ref === 'github:example/openclaw-skill/skills/provider-demo' && entry.source.provider.visibility === 'public';" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/library.yaml"
@@ -663,6 +862,7 @@ grep -Fxq "openclaw" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/skills/openclaw_example
   SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
   SKILLSPM_TEST_CLAWHUB_BASE_URL="$PROVIDER_CLAWHUB_BASE_URL" \
   "${CLI[@]}" add clawhub:example/provider-demo --install
+  HOME="$PROVIDER_BOOTSTRAP_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [manifest, lockfile] = docs; const root = manifest.skills[0]; const entry = lockfile.skills['clawhub:example/provider-demo']; return manifest.skills.length === 1 && root.id === 'clawhub:example/provider-demo' && root.version === '2.2.0' && root.source.kind === 'provider' && root.source.value === 'clawhub:example/provider-demo' && root.source.provider.name === 'clawhub' && root.source.provider.ref === 'github:example/clawhub-skill/skills/provider-demo' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.2.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/clawhub-skill/skills/provider-demo';" "$PROVIDER_CLAWHUB_PROJECT/skills.yaml" "$PROVIDER_CLAWHUB_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['clawhub:example/provider-demo'].versions['2.2.0']; return entry.source.kind === 'provider' && entry.source.value === 'clawhub:example/provider-demo' && entry.source.provider.name === 'clawhub' && entry.source.provider.ref === 'github:example/clawhub-skill/skills/provider-demo' && entry.source.provider.visibility === 'public';" "$PROVIDER_BOOTSTRAP_HOME/.skillspm/library.yaml"
@@ -696,6 +896,7 @@ YAML
   SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
   SKILLSPM_TEST_SKILLS_SH_BASE_URL="$PROVIDER_SKILLS_SH_BASE_URL" \
   "${CLI[@]}" install
+  HOME="$PROVIDER_RECORDED_SKILLS_SH_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [lockfile] = docs; const entry = lockfile.skills['skills.sh:acme/demo-skill']; return entry.version === '1.5.0' && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/skills-sh-skill/skills/demo-skill';" "$PROVIDER_RECORDED_SKILLS_SH_PROJECT/skills.lock"
 
@@ -717,6 +918,7 @@ YAML
   SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
   SKILLSPM_TEST_OPENCLAW_BASE_URL="$PROVIDER_OPENCLAW_BASE_URL" \
   "${CLI[@]}" install
+  HOME="$PROVIDER_RECORDED_OPENCLAW_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [lockfile] = docs; const entry = lockfile.skills['openclaw:example/provider-demo']; return entry.version === '2.1.0' && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/openclaw-skill/skills/provider-demo';" "$PROVIDER_RECORDED_OPENCLAW_PROJECT/skills.lock"
 
@@ -738,6 +940,7 @@ YAML
   SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
   SKILLSPM_TEST_CLAWHUB_BASE_URL="$PROVIDER_CLAWHUB_BASE_URL" \
   "${CLI[@]}" install
+  HOME="$PROVIDER_RECORDED_CLAWHUB_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [lockfile] = docs; const entry = lockfile.skills['clawhub:example/provider-demo']; return entry.version === '2.2.0' && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/clawhub-skill/skills/provider-demo';" "$PROVIDER_RECORDED_CLAWHUB_PROJECT/skills.lock"
 
@@ -751,6 +954,7 @@ YAML
   SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
   SKILLSPM_TEST_SKILLS_SH_BASE_URL="$PROVIDER_SKILLS_SH_BASE_URL" \
   "${CLI[@]}" install
+  HOME="$PROVIDER_DIRECT_SKILLS_SH_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [lockfile, library] = docs; const lock = lockfile.skills['skills.sh:acme/demo-skill']; const lib = library.skills['skills.sh:acme/demo-skill'].versions['1.5.0']; return lock.version === '1.5.0' && lock.resolved_from.type === 'provider' && lock.resolved_from.ref === 'github:example/skills-sh-skill/skills/demo-skill' && lib.source.kind === 'provider' && lib.source.value === 'skills.sh:acme/demo-skill' && lib.source.provider.name === 'skills.sh' && lib.source.provider.ref === 'github:example/skills-sh-skill/skills/demo-skill';" "$PROVIDER_DIRECT_SKILLS_SH_PROJECT/skills.lock" "$PROVIDER_DIRECT_SKILLS_SH_HOME/.skillspm/library.yaml"
 grep -Fxq "skills-sh" "$PROVIDER_DIRECT_SKILLS_SH_HOME/.skillspm/skills/skills.sh_acme__demo-skill@1.5.0/materialization.txt"
@@ -766,6 +970,7 @@ YAML
   SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" \
   SKILLSPM_TEST_OPENCLAW_BASE_URL="$PROVIDER_OPENCLAW_BASE_URL" \
   "${CLI[@]}" install
+  HOME="$PROVIDER_DIRECT_OPENCLAW_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [lockfile, library] = docs; const lock = lockfile.skills['openclaw:example/provider-demo']; const lib = library.skills['openclaw:example/provider-demo'].versions['2.1.0']; return lock.version === '2.1.0' && lock.resolved_from.type === 'provider' && lock.resolved_from.ref === 'github:example/openclaw-skill/skills/provider-demo' && lib.source.kind === 'provider' && lib.source.value === 'openclaw:example/provider-demo' && lib.source.provider.name === 'openclaw' && lib.source.provider.ref === 'github:example/openclaw-skill/skills/provider-demo';" "$PROVIDER_DIRECT_OPENCLAW_PROJECT/skills.lock" "$PROVIDER_DIRECT_OPENCLAW_HOME/.skillspm/library.yaml"
 grep -Fxq "openclaw" "$PROVIDER_DIRECT_OPENCLAW_HOME/.skillspm/skills/openclaw_example__provider-demo@2.1.0/materialization.txt"
@@ -833,6 +1038,7 @@ YAML
 (
   cd "$PROVIDER_CLEAN_PROJECT"
   HOME="$PROVIDER_CLEAN_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+  HOME="$PROVIDER_CLEAN_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return manifest.skills.length === 1 && manifest.skills[0].id === 'github:example/public-skill/skills/provider-demo' && manifest.skills[0].version === '2.0.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/public-skill/skills/provider-demo';" "$PROVIDER_CLEAN_PROJECT/skills.yaml" "$PROVIDER_CLEAN_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_CLEAN_HOME/.skillspm/library.yaml"
@@ -876,6 +1082,7 @@ NODE
 (
   cd "$PROVIDER_REFRESH_PROJECT"
   HOME="$PROVIDER_FAIL_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+  HOME="$PROVIDER_FAIL_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [manifest, lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return manifest.skills.length === 1 && manifest.skills[0].id === 'github:example/public-skill/skills/provider-demo' && manifest.skills[0].version === '2.0.0' && lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/public-skill/skills/provider-demo';" "$PROVIDER_REFRESH_PROJECT/skills.yaml" "$PROVIDER_REFRESH_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_FAIL_HOME/.skillspm/library.yaml"
@@ -905,6 +1112,7 @@ YAML
 (
   cd "$PROVIDER_URL_PROJECT"
   HOME="$PROVIDER_URL_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+  HOME="$PROVIDER_URL_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'https://github.com/example/public-skill/tree/main/skills/provider-demo';" "$PROVIDER_URL_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'https://github.com/example/public-skill/tree/main/skills/provider-demo' && entry.source.provider.name === 'github' && entry.source.provider.ref === 'refs/tags/v2.0.0' && entry.source.provider.visibility === 'public';" "$PROVIDER_URL_HOME/.skillspm/library.yaml"
@@ -1430,6 +1638,7 @@ NODE
 (
   cd "$PROVIDER_INSUFFICIENT_PROJECT"
   HOME="$PROVIDER_INSUFFICIENT_HOME" SKILLSPM_TEST_GITHUB_ROOT="$PROVIDER_FIXTURE_ROOT" "${CLI[@]}" install
+  HOME="$PROVIDER_INSUFFICIENT_HOME" "${CLI[@]}" freeze
 )
 assert_node "const [lockfile] = docs; const entry = lockfile.skills['github:example/public-skill/skills/provider-demo']; return lockfile.schema === 'skills-lock/v3' && entry.version === '2.0.0' && /^sha256:[0-9a-f]{64}$/.test(entry.digest) && entry.resolved_from.type === 'provider' && entry.resolved_from.ref === 'github:example/public-skill/skills/provider-demo';" "$PROVIDER_INSUFFICIENT_PROJECT/skills.lock"
 assert_node "const [library] = docs; const entry = library.skills['github:example/public-skill/skills/provider-demo'].versions['2.0.0']; return entry.source.kind === 'provider' && entry.source.value === 'github:example/public-skill/skills/provider-demo' && entry.source.provider.name === 'github' && (entry.source.provider.ref === undefined || entry.source.provider.ref === 'refs/tags/v2.0.0') && entry.source.provider.visibility === 'public';" "$PROVIDER_INSUFFICIENT_HOME/.skillspm/library.yaml"
