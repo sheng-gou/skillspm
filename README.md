@@ -2,33 +2,39 @@
 
 ![SkillsPM social preview](./docs/social-preview.jpg)
 
-Build reproducible, portable Skills environments with an explicit Development vs Confirmed state model.
+Agent-native Skills management.
 
-`skillspm` keeps project intent in `skills.yaml`, confirmed state in `skills.lock`, and machine-local materialization in `~/.skillspm/*`.
+Reproducible, portable, restorable Skills environments that agents can install, explain, confirm, sync, and recover for you.
 
-`inspect` explains drift and next safe actions. `freeze` is the explicit confirmation refresh step. `install`, `sync`, and `pack` consume confirmed state by default.
+`skillspm` keeps project intent in `skills.yaml`, confirmed state in `skills.lock`, and machine-local materialization in `~/.skillspm/*`. It gives agents a clean workflow: prepare a repo from intent, explain drift before risky actions, confirm accepted results explicitly, then sync or pack only from confirmed state.
 
-## What you can do with skillspm
+## Four agent-native cases
 
-### [Development] Start or change the environment
+### Case 1 — Development environment — Agent prepares the project from `skills.yaml`
 
-Create or edit `skills.yaml` with `add`, `adopt`, or direct manifest changes. Then run `skillspm install` to materialize the current intent locally. If no confirmed state exists yet, the project remains in Development.
+You point an agent at a repository and ask it to install the local Skills environment. The agent reads project intent, materializes the environment locally, and explains whether the repo is still in Development, Drifted Development, or already Confirmed.
 
-### [Development] Inspect drift and confirm accepted changes
+### Case 2 — Development environment — Agent adds or adopts Skills without pretending they are confirmed
 
-Run `skillspm inspect` to see whether the project is Uninitialized, Development, Drifted Development, or Confirmed. When the current result is accepted, run `skillspm freeze` to refresh `skills.lock` explicitly.
+You ask an agent to add a local Skill, add a provider-backed Skill, or adopt an existing target or directory. The agent updates `skills.yaml`, materializes the current result locally, and leaves `skills.lock` unchanged until you explicitly accept the resolved state.
 
-### [Confirmed] Install or sync the confirmed environment
+### Case 3 — Confirmed environment — Agent reproduces and syncs the accepted environment across agents
 
-When `skills.yaml` and `skills.lock` are aligned, `skillspm install` reproduces the confirmed environment and `skillspm sync <target>` distributes it explicitly. Sync stays non-destructive and refuses when confirmation is missing or stale.
+Once `skills.yaml` and `skills.lock` align, the agent can reproduce the confirmed environment with `skillspm install` and distribute it with `skillspm sync <target>`. Sync stays non-destructive and refuses when confirmation is missing or stale.
 
-### [Confirmed] Pack and restore the confirmed environment
+### Case 4 — Confirmed environment — Agent creates a restore pack for another machine
 
-Use `skillspm pack` to bundle the confirmed environment into a `.skillspm.tgz` restore vehicle, then `skillspm install <pack>` to restore it elsewhere. Packs supplement recovery for private, local, offline, and cross-machine workflows; they do not become project truth.
+When you want portable recovery, the agent can create a `.skillspm.tgz` with `skillspm pack` and restore it elsewhere with `skillspm install <pack>`. Packs transport confirmed state; they do not replace project intent or confirmed state as truth.
 
 ## Quick start
 
-Minimal `skills.yaml`:
+Install `skillspm` once:
+
+```bash
+npm install -g skillspm
+```
+
+Create a minimal `skills.yaml`:
 
 ```yaml
 skills:
@@ -41,92 +47,124 @@ targets:
   - type: openclaw
 ```
 
-Then use this onboarding path:
+Ask the agent to prepare the repo:
+
+- "Install the Skills environment for this project."
+- "Tell me whether this repo is still in Development or already Confirmed."
+
+What the agent runs:
 
 ```bash
 skillspm install
 skillspm inspect
-skillspm install
+```
+
+When you want to accept, sync, or pack the confirmed environment:
+
+- "Accept the current resolved environment and refresh the lockfile."
+- "Sync the confirmed environment to OpenClaw."
+- "Create a restore pack for another machine."
+
+What the agent runs:
+
+```bash
 skillspm freeze
 skillspm sync openclaw
 skillspm pack
 ```
 
-What each step means:
+## Agent workflows
 
-- first `install`: materialize current intent locally from `skills.yaml`
-- `inspect`: check whether the project is still Development, Drifted Development, or Confirmed
-- second `install`: re-materialize current intent if you made more changes before confirming
-- `freeze`: explicitly refresh confirmed state in `skills.lock`
-- `sync`: distribute the confirmed environment explicitly and non-destructively
-- `pack`: create a confirmed-state restore bundle for transport and recovery
+### Workflow 1 — Prepare a repo locally
 
-## Common workflows
+What the user says:
 
-### [Development] Start or change the environment
+"Install `skillspm`, read this repo's `skills.yaml`, and prepare the local Skills environment."
+
+What the agent runs:
+
+```bash
+npm install -g skillspm
+skillspm install
+skillspm inspect
+```
+
+`install` materializes current intent locally. `inspect` explains the current state and the next safe action before you confirm or distribute anything.
+
+### Workflow 2 — Add or adopt Skills during Development
+
+What the user says:
+
+"Add this local Skill, add this provider-backed Skill, or adopt an existing target into the project."
+
+What the agent runs:
 
 ```bash
 skillspm add ./skills/my-skill
-skillspm install
-```
-
-You can also bring existing content under intent management:
-
-```bash
+skillspm add owner/repo/skill --provider github
+skillspm add example/skill --provider openclaw
 skillspm adopt openclaw
 skillspm install
 ```
 
-Mixed-source intent is supported and persisted minimally in `skills.yaml`:
+`add` and `adopt` update `skills.yaml`. A follow-up `install` materializes the current Development result locally without claiming that confirmation already happened.
 
-```bash
-skillspm add owner/repo/skill --provider github
-skillspm add example/skill --provider openclaw
-skillspm add https://github.com/owner/repo/tree/main/skills/my-skill
-```
+### Workflow 3 — Explain drift, confirm the result, and sync it
 
-### [Development] Inspect drift and confirm accepted changes
+What the user says:
+
+"Explain drift, accept the current environment, and sync the confirmed Skills to my agent targets."
+
+What the agent runs:
 
 ```bash
 skillspm inspect
-skillspm install
 skillspm freeze
+skillspm sync openclaw,codex
 ```
 
-Use `inspect` as the user-facing drift entrypoint. `install` may materialize current intent locally, but `freeze` is the explicit step that refreshes confirmation.
+`freeze` explicitly refreshes `skills.lock`. `sync` writes confirmed state only and keeps unrelated target contents intact.
 
-### [Confirmed] Install or sync the confirmed environment
+### Workflow 4 — Pack and restore a confirmed environment
 
-```bash
-skillspm install
-skillspm sync openclaw
-```
+What the user says:
 
-Use `skillspm doctor --json` when you need validation-oriented diagnostics in addition to the user-facing `inspect` state summary.
+"Create a portable restore pack from the confirmed environment, then use it to restore another machine."
 
-### [Confirmed] Pack and restore the confirmed environment
+What the agent runs:
 
 ```bash
 skillspm pack dist/team-env.skillspm.tgz
 skillspm install dist/team-env.skillspm.tgz
 ```
 
+Packs are for private, local, offline, and cross-machine recovery. They supplement the normal install flow instead of replacing `skills.yaml` plus `skills.lock`.
+
 ## Core commands
 
-- `skillspm add <content>`: add a local path, GitHub input, or provider-backed id into `skills.yaml`
-- `skillspm inspect`: explain current intent, confirmed state, drift, and next safe actions
-- `skillspm install [input]`: consume confirmed state by default, while still materializing current intent locally when no confirmed state exists yet
-- `skillspm pack [out]`: bundle the confirmed environment into a portable `.skillspm.tgz`
-- `skillspm freeze`: explicitly refresh `skills.lock` to the accepted current result
-- `skillspm adopt [source]`: discover existing skills and merge them into `skills.yaml`
-- `skillspm sync [target]`: sync the confirmed environment from the local library cache to one or more targets
-- `skillspm doctor`: check manifest, lockfile, cache, pack readiness, targets, and conflicts
-- `skillspm help [command]`: show command help
+These are the public commands agents use on your behalf, and the user value each one provides:
 
-## Project state model
+- `skillspm add <content>`: bring a local path, GitHub input, or provider-backed id under project intent in `skills.yaml`
+- `skillspm inspect`: explain intent, confirmed state, drift, and the next safe action in user-facing language
+- `skillspm install [input]`: reproduce confirmed state by default, or materialize current intent locally during Development
+- `skillspm freeze`: explicitly accept the current resolved result and refresh `skills.lock`
+- `skillspm adopt [source]`: merge an existing target or directory into project intent instead of rebuilding it by hand
+- `skillspm sync [target]`: distribute the confirmed environment from the local library cache into one or more targets
+- `skillspm pack [out]`: create a portable confirmed-state restore bundle for another machine, team, or offline workflow
+- `skillspm doctor`: validate manifest, lockfile, cache, targets, pack readiness, and conflicts when diagnosis is needed
+- `skillspm help [command]`: show command-specific usage
 
-- `skills.yaml` = intent for the project: desired root `skills`, optional per-root `source`, and optional `targets`
-- `skills.lock` = confirmed state: exact accepted version, digest, and resolved-from provenance
+## Development vs Confirmed state
+
+- Uninitialized: the project has not established usable intent yet
+- Development: `skills.yaml` expresses current intent, and `install` can materialize it locally
+- Drifted Development: current intent or local materialization no longer matches the last confirmed result
+- Confirmed: `skills.yaml` and `skills.lock` align, so `install`, `sync`, and `pack` consume confirmed state by default
+
+In short:
+
+- `skills.yaml` = project intent with desired `skills`, optional per-root `source`, and optional `targets`
+- `skills.lock` = confirmed state with exact accepted version, digest, and resolved-from provenance
 - `~/.skillspm/*` = machine-local cache/materialization layer, never project truth
 - `.skillspm.tgz` = confirmed-state restore vehicle, never the source of truth
 
@@ -211,7 +249,7 @@ source:
     visibility: public
 ```
 
-Recorded public GitHub provider provenance may also use an anonymous public GitHub URL as either `source.value` (for `github`) or `source.provider.ref` (for provider-preserving records), for example `https://github.com/owner/repo/tree/main/skills/demo`. URL-embedded credentials are not supported.
+Recorded public GitHub provider provenance may also use an anonymous public GitHub URL as either `source.value` for `github` or `source.provider.ref` for provider-preserving records, for example `https://github.com/owner/repo/tree/main/skills/demo`. URL-embedded credentials are not supported.
 
 ## Pack
 
@@ -234,11 +272,24 @@ Packs supplement the normal install flow. They do not redefine the source model 
 
 Clean machines can also re-materialize public provider-backed sources from `skills.lock` when `resolved_from.type=provider` and `resolved_from.ref` is either a canonical `github:` locator or an anonymous public `https://github.com/...` locator.
 
-Recorded provider provenance can keep the original provider id (`openclaw:...`, `clawhub:...`, `skills.sh:...`) while persisting the backing public GitHub locator used for re-materialization. Canonical public `github:` skills and provider-backed public skills remain recoverable through unauthenticated public tag fetches.
+Recorded provider provenance can keep the original provider id such as `openclaw:...`, `clawhub:...`, or `skills.sh:...` while persisting the backing public GitHub locator used for re-materialization. Canonical public `github:` skills and provider-backed public skills remain recoverable through unauthenticated public tag fetches.
 
 Recovered provider skill roots must be symlink-free. Digest mismatches fail closed instead of silently accepting drift.
 
-Provider recovery is still intentionally narrow in this branch: clean-machine fallback only covers public GitHub-backed providers (`github`, `openclaw`, `clawhub`, `skills.sh`) and only through unauthenticated access. `skills.sh:` ids resolve through their public GitHub repo/path semantics; `openclaw:` / `clawhub:` ids resolve through public provider metadata and then pin to a public GitHub backing locator. The recovery path disables credential helpers, askpass hooks, and terminal prompting so private/authenticated GitHub access fails closed honestly. Private repos, authenticated provider flows, non-public visibility, and plain git inputs still require an existing cache entry or a pack.
+Provider recovery is intentionally narrow in this branch: clean-machine fallback only covers public GitHub-backed providers `github`, `openclaw`, `clawhub`, and `skills.sh`, and only through unauthenticated access. `skills.sh:` ids resolve through their public GitHub repo/path semantics; `openclaw:` and `clawhub:` ids resolve through public provider metadata and then pin to a public GitHub backing locator. The recovery path disables credential helpers, askpass hooks, and terminal prompting so private or authenticated GitHub access fails closed honestly. Private repos, authenticated provider flows, non-public visibility, and plain git inputs still require an existing cache entry or a pack.
+
+## For agents
+
+Default workflow:
+
+1. `skillspm install`
+2. `skillspm inspect`
+3. `skillspm install` again only if intent changed and local materialization must be refreshed before confirmation
+4. `skillspm freeze` only when the task explicitly requires updating confirmed state in `skills.lock`
+5. `skillspm sync <target>` or `skillspm pack` only when confirmed-state distribution or restore output is intended
+6. `skillspm doctor --json` when validation-oriented diagnostics are needed
+
+Prefer editing `skills.yaml` when changing project intent. Avoid hand-editing `skills.lock`, treating cache contents as project truth, or switching scope with `-g` unless the user explicitly asks.
 
 ## Current 0.4.0 contract
 
